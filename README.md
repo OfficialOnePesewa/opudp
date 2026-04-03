@@ -24,6 +24,18 @@
 
 ---
 
+## 💻 Server Requirements – Works on ANY VPS
+
+- **Operating Systems**: Ubuntu 18.04 / 20.04 / 22.04, Debian 10 / 11 / 12  
+- **Architecture**: x86_64 (AMD64) only  
+- **Root access** required (either directly as root or via `sudo`/`su`)  
+- **Minimum specs**: 1 CPU core, 512 MB RAM (supports 50+ users)  
+- **Firewall**: The script automatically opens UDP ports 5667–5767 in `ufw` and `iptables`  
+
+Tested on: DigitalOcean, Vultr, Linode, AWS EC2, Google Cloud, Hetzner, OVH, and any standard KVM VPS.
+
+---
+
 ## 📱 Required Client App
 
 Your users must install the **ZIVPN** app on Android:
@@ -53,20 +65,13 @@ Once bound, only that specific device can use the account.
 
 ---
 
-## 🖥️ Server Requirements
-
-- **Ubuntu 20.04 / 22.04** (or any Debian‑based distro)  
-- **Root access**  
-- **Open port 5667+** (UDP) in your firewall  
-- **1 CPU core, 512 MB RAM** (enough for 50+ users)  
-
----
-
 ## 📥 Installation
 
-SSH into your server as **root** and run:
-
+### Step 1: Log in as root
 ```bash
-wget -O opudp.sh https://raw.githubusercontent.com/OfficialOnePesewa/opudp/main/opudp.sh
-sudo chmod +x opudp.sh
-sudo ./opudp.sh
+# If you have sudo but are not root:
+sudo -i
+
+# OR if sudo is not installed (Debian minimal):
+su -
+# (then enter root password)
