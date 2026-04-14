@@ -17,9 +17,6 @@ CYN='\e[1;36m'   # Cyan
 WHT='\e[1;37m'   # White
 RST='\e[0m'      # Reset
 
-# Rainbow array for title
-COLORS=("$RED" "$GRN" "$YLW" "$BLU" "$MAG" "$CYN" "$WHT" "$RED" "$GRN" "$YLW" "$BLU" "$MAG" "$CYN")
-
 # --- Auto-install dependencies ---
 if ! command -v jq &>/dev/null; then
     apt-get install -y jq -qq &>/dev/null
@@ -65,7 +62,7 @@ USER_COUNT=$(jq '.auth.config | length' "$CONFIG" 2>/dev/null || echo "0")
 # Current date/time (live)
 DATE_TIME=$(date +"%A, %d %B %Y  |  %H:%M:%S")
 
-# --- 3D Rainbow ASCII Title (shadow effect with offset) ---
+# --- 3D Rainbow ASCII Title (shadow effect) ---
 print_title() {
     echo -e "\n\n"
     # Shadow layer (dark gray)
@@ -83,9 +80,9 @@ print_title() {
     echo -e "\e[1;30m                                        ╚═════╝ ╚═════╝ ╚═╝                                   \e[0m"
     echo -e "\e[1;30m                                                                                              \e[0m"
 
-    # Move cursor up 8 lines to overlay rainbow version
+    # Move cursor up 9 lines to overlay rainbow version
     tput cuu 9
-    # Rainbow foreground (each character colored differently is complex, we'll color whole lines differently)
+    # Rainbow foreground
     echo -e "${RED}                              ██████╗ ${GRN}███╗   ██╗${YLW}███████╗${BLU}██████╗ ${MAG}███████╗${CYN}███████╗${WHT}██╗    ██╗${RED} █████╗     ${RST}"
     echo -e "${GRN}                             ██╔═══██╗${YLW}████╗  ██║${BLU}██╔════╝${MAG}██╔══██╗${CYN}██╔════╝${WHT}██╔════╝${RED}██║    ██║${GRN}██╔══██╗    ${RST}"
     echo -e "${YLW}                             ██║   ██║${BLU}██╔██╗ ██║${MAG}█████╗  ${CYN}██████╔╝${WHT}█████╗  ${RED}███████╗${GRN}██║ █╗ ██║${YLW}███████║    ${RST}"
@@ -116,7 +113,7 @@ print_info_box() {
     echo ""
 }
 
-# --- Banner (combine title + info) ---
+# --- Banner ---
 banner() {
     clear
     print_title
@@ -140,15 +137,19 @@ goodbye() {
     echo -e "\n"
 }
 
-# --- Add User (with card) ---
+# --- Add User (with card) - FIXED PROMPTS ---
 add_user() {
     echo -e "\n${YLW}═══════════════ CREATE NEW USER ═══════════════${RST}"
-    read -p "$(echo -e ${GRN}User Password:${RST} )" pass
-    read -p "$(echo -e ${GRN}Validity (Days):${RST} )" days
-    read -p "$(echo -e ${GRN}Quota (GB/MB):${RST} )" quota
-    read -p "$(echo -e ${GRN}Device ID (Optional):${RST} )" devid
+    echo -ne "${GRN}User Password: ${RST}"
+    read pass
+    echo -ne "${GRN}Validity (Days): ${RST}"
+    read days
+    echo -ne "${GRN}Quota (GB/MB): ${RST}"
+    read quota
+    echo -ne "${GRN}Device ID (Optional): ${RST}"
+    read devid
 
-    exp=$(date -d "+$days days" +%Y-%m-%d)
+    exp=$(date -d "+$days days" +%Y-%m-%d 2>/dev/null || echo "Invalid date")
 
     if [ -f "$CONFIG" ]; then
         jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
@@ -175,7 +176,8 @@ add_user() {
 
 # --- Trial User ---
 trial_user() {
-    read -p "$(echo -e ${GRN}Minutes (1-60):${RST} )" mins
+    echo -ne "${GRN}Minutes (1-60): ${RST}"
+    read mins
     pass="trial_$(openssl rand -hex 2)"
     if [ -f "$CONFIG" ]; then
         jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
@@ -210,7 +212,8 @@ show_menu() {
 while true; do
     banner
     show_menu
-    read -p "$(echo -e ${CYN}Choose [0-99]:${RST} )" opt
+    echo -ne "${CYN}Choose [0-99]: ${RST}"
+    read opt
 
     case $opt in
         1) systemctl start zivpn && echo -e "${GRN}Started.${RST}" || echo -e "${RED}Failed.${RST}" ;;
@@ -229,7 +232,8 @@ while true; do
            ;;
         6) add_user ;;
         7)
-           read -p "$(echo -e ${GRN}Password to remove:${RST} )" pass
+           echo -ne "${GRN}Password to remove: ${RST}"
+           read pass
            if [ -f "$CONFIG" ]; then
                jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
            fi
@@ -238,16 +242,11 @@ while true; do
            echo -e "${GRN}User removed.${RST}"
            read -p "Press Enter to continue..."
            ;;
-        8) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        9) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        10) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        11) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        12) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        13) echo "Function not implemented yet."; read -p "Press Enter..." ;;
+        8|9|10|11|12|13|15|16|17|19)
+           echo "Function not implemented yet."
+           read -p "Press Enter..."
+           ;;
         14) journalctl -u zivpn -f ;;
-        15) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        16) echo "Function not implemented yet."; read -p "Press Enter..." ;;
-        17) echo "Function not implemented yet."; read -p "Press Enter..." ;;
         18)
            echo -e "\n${YLW}Fetching latest panel from GitHub...${RST}"
            wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
@@ -256,7 +255,6 @@ while true; do
            sleep 2
            exec onepesewa
            ;;
-        19) echo "Function not implemented yet."; read -p "Press Enter..." ;;
         20) trial_user ;;
         99)
            systemctl stop zivpn 2>/dev/null
