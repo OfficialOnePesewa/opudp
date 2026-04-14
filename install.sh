@@ -24,13 +24,25 @@ apt-get install -y -qq wget curl
 OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
 echo -e "${G}[+] OS: $OS${NC}"
 
-# Get server IP and location
-echo -e "${Y}[+] Fetching server info...${NC}"
-GEO=$(curl -4 -s --max-time 10 "https://ipapi.co/json/" 2>/dev/null || echo '{}')
-IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+' || echo "N/A")
-CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+' || echo "Unknown")
-COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+' || echo "Unknown")
-ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+' || echo "Unknown")
+# Get server IP and location using ipapi.co
+echo -e "${Y}[+] Fetching server info from ipapi.co...${NC}"
+GEO=$(curl -4 -s --max-time 8 "https://ipapi.co/json/" 2>/dev/null)
+if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
+    echo -e "${Y}[!] ipapi.co unreachable – showing default values.${NC}"
+    IP="N/A"
+    CITY="Unknown"
+    COUNTRY="Unknown"
+    ISP="Unknown"
+else
+    IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
+    CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
+    COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
+    ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
+    [ -z "$IP" ] && IP="N/A"
+    [ -z "$CITY" ] && CITY="Unknown"
+    [ -z "$COUNTRY" ] && COUNTRY="Unknown"
+    [ -z "$ISP" ] && ISP="Unknown"
+fi
 LOC="${CITY}, ${COUNTRY}"
 
 # Banner
