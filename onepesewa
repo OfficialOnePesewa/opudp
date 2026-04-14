@@ -20,18 +20,24 @@ if ! command -v jq &>/dev/null; then
     apt-get install -y jq -qq &>/dev/null
 fi
 
-# --- Fetch System Info ---
-GEO=$(curl -4 -s --max-time 10 "https://ipapi.co/json/" 2>/dev/null)
-IP=$(echo "$GEO"      | grep -oP '"ip":\s*"\K[^"]+')
-CITY=$(echo "$GEO"    | grep -oP '"city":\s*"\K[^"]+')
-COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
-ISP=$(echo "$GEO"     | grep -oP '"org":\s*"\K[^"]+')
+# --- Fetch System Info from ipapi.co (robust) ---
+GEO=$(curl -4 -s --max-time 8 "https://ipapi.co/json/" 2>/dev/null)
+if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
+    IP="N/A"
+    CITY="Unknown"
+    COUNTRY="Unknown"
+    ISP="Unknown"
+else
+    IP=$(echo "$GEO"      | grep -oP '"ip":\s*"\K[^"]+')
+    CITY=$(echo "$GEO"    | grep -oP '"city":\s*"\K[^"]+')
+    COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
+    ISP=$(echo "$GEO"     | grep -oP '"org":\s*"\K[^"]+')
+    [ -z "$IP" ]      && IP="N/A"
+    [ -z "$CITY" ]    && CITY="Unknown"
+    [ -z "$COUNTRY" ] && COUNTRY="Unknown"
+    [ -z "$ISP" ]     && ISP="Unknown"
+fi
 OS_INFO=$(grep "PRETTY_NAME" /etc/os-release | cut -d '"' -f 2)
-
-[ -z "$IP" ]      && IP="N/A"
-[ -z "$CITY" ]    && CITY="Unknown"
-[ -z "$COUNTRY" ] && COUNTRY="Unknown"
-[ -z "$ISP" ]     && ISP="Unknown"
 
 # --- Banner ---
 banner() {
