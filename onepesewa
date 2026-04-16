@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Full Feature Edition with Repair Tracking
+# OP UDP PANEL – Full Feature Edition with Clean User Info Card
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -115,7 +115,7 @@ show_menu() {
     printf "${WHT}│${RST}  ${GRN}6)${RST} Add User   ${GRN}7)${RST} Remove     ${GRN}8)${RST} Renew      ${GRN}9)${RST} Cleanup      ${GRN}10)${RST} Usage Stats ${WHT}│${RST}\n"
     printf "${WHT}│${RST}  ${GRN}11)${RST} BW+Expiry ${GRN}12)${RST} Reset BW   ${GRN}13)${RST} Speed Test ${GRN}14)${RST} Live Logs    ${GRN}15)${RST} Backup      ${WHT}│${RST}\n"
     printf "${WHT}│${RST}  ${GRN}16)${RST} Restore   ${GRN}17)${RST} Port Range ${GRN}18)${RST} ${YLW}Update${RST}     ${GRN}19)${RST} Conn Limit   ${GRN}20)${RST} Trial User  ${WHT}│${RST}\n"
-    printf "${WHT}│${RST}  ${GRN}21)${RST} User Info  ${GRN}22)${RST} Repair Tracking                                  ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}21)${RST} User Info                                                       ${WHT}│${RST}\n"
     printf "${WHT}├──────────────────────────────────────────────────────────────────────┤${RST}\n"
     printf "${WHT}│${RST}  ${RED}99) UNINSTALL${RST}                                                ${GRN}0) Exit${RST}  ${WHT}│${RST}\n"
     printf "${WHT}╰──────────────────────────────────────────────────────────────────────╯${RST}\n"
@@ -168,27 +168,6 @@ remove_tracking() {
     iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
 }
 
-repair_tracking() {
-    echo -e "\n${YLW}Repairing iptables tracking for all users...${RST}"
-    local repaired=0
-    while IFS='|' read -r pass expiry quota port deviceid startdate; do
-        if [ -n "$port" ] && [ "$port" != "None" ]; then
-            # Check if chains exist; if not, create them
-            if ! iptables -L UDP_IN_$port &>/dev/null; then
-                echo "  Fixing port $port for user $pass"
-                setup_tracking "$port"
-                repaired=$((repaired+1))
-            fi
-            # Ensure NAT rule exists
-            if ! iptables -t nat -C PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null; then
-                iptables -t nat -A PREROUTING -p udp --dport $port -j DNAT --to-destination :5667
-            fi
-        fi
-    done < "$DB"
-    echo -e "${GRN}Repaired $repaired user(s).${RST}"
-    read -p "Press Enter to continue..."
-}
-
 update_usage_db() {
     while IFS='|' read -r pass expiry quota port deviceid startdate; do
         if [ -n "$port" ] && [ "$port" != "None" ]; then
@@ -198,7 +177,6 @@ update_usage_db() {
             grep -v "^$pass|" "$USAGE_DB" 2>/dev/null > /tmp/usage_tmp
             echo "$pass|$total" >> /tmp/usage_tmp
             mv /tmp/usage_tmp "$USAGE_DB"
-            # Quota enforcement
             quota_bytes=$(quota_to_bytes "$quota")
             if [ $quota_bytes -gt 0 ] && [ $total -ge $quota_bytes ]; then
                 if grep -q "^$pass|" "$DB" && ! grep -q "^$pass|.*|PAUSED" "$DB"; then
@@ -224,7 +202,7 @@ install_cron() {
     fi
 }
 
-# --- Feature Implementations ---
+# --- Features ---
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
     read -p "$(echo -e "${GRN}Base Password  : ${RST}")" basepass
@@ -320,32 +298,31 @@ user_info() {
     fi
     IFS='|' read -r p expiry quota port deviceid startdate <<< "$user_data"
     used_bytes=$(get_usage "$pass")
-    quota_bytes=$(quota_to_bytes "$quota")
-    remaining_bytes=$((quota_bytes - used_bytes))
-    [ $remaining_bytes -lt 0 ] && remaining_bytes=0
     used_fmt=$(format_bytes ${used_bytes:-0})
-    remaining_fmt=$(format_bytes $remaining_bytes)
+    
+    exp_sec=$(date -d "$expiry" +%s 2>/dev/null)
+    now_sec=$(date +%s)
+    if [ -n "$exp_sec" ]; then
+        days_left=$(( (exp_sec - now_sec) / 86400 ))
+        [ $days_left -lt 0 ] && days_left=0
+    else
+        days_left="unknown"
+    fi
     
     clear
-    echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
-    echo -e "${CYN}│                                                      │${RST}"
-    echo -e "${CYN}│  ${GRN}Dear user ${WHT}${pass:0:20}${GRN}, Your subscription will end in${RST}"
-    echo -e "${CYN}│  ${WHT}$(( ($(date -d "$expiry" +%s) - $(date +%s)) / 86400 )) days.${RST}"
-    echo -e "${CYN}│                                                      │${RST}"
-    echo -e "${CYN}│  ${YLW}Your subscription details${RST}"
-    echo -e "${CYN}│                                                      │${RST}"
-    echo -e "${CYN}│  ${MAG}Configuration Date${RST}"
-    echo -e "${CYN}│  ${WHT}Start Date : $startdate${RST}"
-    echo -e "${CYN}│  ${WHT}Expiry Date: $expiry${RST}"
-    echo -e "${CYN}│                                                      │${RST}"
-    echo -e "${CYN}│  ${MAG}Configuration Quota${RST}"
-    echo -e "${CYN}│  ${WHT}Purchased Traffic : $quota${RST}"
-    echo -e "${CYN}│  ${WHT}Consumed Traffic  : $used_fmt${RST}"
-    echo -e "${CYN}│  ${WHT}Remaining Traffic : $remaining_fmt${RST}"
-    echo -e "${CYN}│                                                      │${RST}"
-    echo -e "${CYN}│  ${MAG}Device ID : ${WHT}$deviceid${RST}"
-    echo -e "${CYN}│  ${MAG}Port      : ${WHT}$port${RST}"
-    echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}\n"
+    echo ""
+    echo -e "${WHT}Dear user ${YLW}${p}${WHT}, Your subscription will end in ${GRN}${days_left}${WHT} days. Your subscription details -${RST}"
+    echo ""
+    echo -e "${WHT}Configuration Date${RST}"
+    echo -e "${WHT}------------------${RST}"
+    echo -e "${WHT}Start Date : ${startdate:-N/A}${RST}"
+    echo -e "${WHT}Expiry Date: ${expiry}${RST}"
+    echo ""
+    echo -e "${WHT}Configuration Quota${RST}"
+    echo -e "${WHT}-------------------${RST}"
+    echo -e "${WHT}Purchased Traffic : ${quota}${RST}"
+    echo -e "${WHT}Consumed Traffic  : ${used_fmt}${RST}"
+    echo ""
     read -p "Press Enter to continue..."
 }
 
@@ -450,7 +427,7 @@ fetch_geo
 
 # Main loop
 while true; do
-    install_cron  # ensure cron is present on every loop start
+    install_cron
     banner
     show_menu
     read -p "$(echo -e "${CYN}Choose [0-99]: ${RST}")" opt
@@ -479,7 +456,6 @@ while true; do
         19) set_conn_limit ;;
         20) trial_user ;;
         21) user_info ;;
-        22) repair_tracking ;;
         99) systemctl stop zivpn 2>/dev/null
             rm -rf /etc/zivpn /usr/local/bin/zivpn /usr/local/bin/onepesewa /etc/cron.d/opudp_bandwidth
             echo -e "${RED}Uninstalled.${RST}"; exit ;;
