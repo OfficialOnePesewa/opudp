@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Redesigned Vertical Dashboard with Device Binding
+# OP UDP PANEL – Redesigned Vertical Dashboard with Compact Header
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -76,17 +76,17 @@ get_sysinfo() {
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
-# ------------------ Beautiful Dashboard ------------------
+# ------------------ Compact Colorful Header ------------------
 print_header() {
     clear
     echo -e "${WHT}┌─────────────────────────────────────────────────────────────────────────────┐${RST}"
     echo -e "${WHT}│${RST}                                                                             ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}   ${RED}██████╗ ${GRN}██████╗     ${YLW}██╗   ██╗${BLU}██████╗ ${MAG}██████╗     ${CYN}██████╗  ${RED}█████╗ ${GRN}███╗   ██╗${YLW}███████╗${BLU}██╗${RST}   ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}  ${RED}██╔═══██╗${GRN}██╔══██╗    ${YLW}██║   ██║${BLU}██╔══██╗${MAG}██╔══██╗    ${CYN}██╔══██╗${RED}██╔══██╗${GRN}████╗  ██║${YLW}██╔════╝${BLU}██║${RST}   ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}  ${RED}██║   ██║${GRN}██████╔╝    ${YLW}██║   ██║${BLU}██║  ██║${MAG}██████╔╝    ${CYN}██████╔╝${RED}███████║${GRN}██╔██╗ ██║${YLW}█████╗  ${BLU}██║${RST}   ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}  ${RED}██║   ██║${GRN}██╔═══╝     ${YLW}██║   ██║${BLU}██║  ██║${MAG}██╔═══╝     ${CYN}██╔═══╝ ${RED}██╔══██║${GRN}██║╚██╗██║${YLW}██╔══╝  ${BLU}██║${RST}   ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}  ${RED}╚██████╔╝${GRN}██║         ${YLW}╚██████╔╝${BLU}██████╔╝${MAG}██║         ${CYN}██║     ${RED}██║  ██║${GRN}██║ ╚████║${YLW}███████╗${BLU}███████╗${RST}${WHT}│${RST}"
-    echo -e "${WHT}│${RST}   ${RED}╚═════╝ ${GRN}╚═╝          ${YLW}╚═════╝ ${BLU}╚═════╝ ${MAG}╚═╝         ${CYN}╚═╝     ${RED}╚═╝  ╚═╝${GRN}╚═╝  ╚═══╝${YLW}╚══════╝${BLU}╚══════╝${RST}${WHT}│${RST}"
+    echo -e "${WHT}│${RST}         ${RED} ██████╗ ${GRN}██████╗     ${YLW}██╗   ██╗${BLU}██████╗ ${MAG}██████╗ ${RST}                      ${WHT}│${RST}"
+    echo -e "${WHT}│${RST}         ${RED}██╔═══██╗${GRN}██╔══██╗    ${YLW}██║   ██║${BLU}██╔══██╗${MAG}██╔══██╗${RST}                     ${WHT}│${RST}"
+    echo -e "${WHT}│${RST}         ${RED}██║   ██║${GRN}██████╔╝    ${YLW}██║   ██║${BLU}██║  ██║${MAG}██████╔╝${RST}                     ${WHT}│${RST}"
+    echo -e "${WHT}│${RST}         ${RED}██║   ██║${GRN}██╔═══╝     ${YLW}██║   ██║${BLU}██║  ██║${MAG}██╔═══╝ ${RST}                     ${WHT}│${RST}"
+    echo -e "${WHT}│${RST}         ${RED}╚██████╔╝${GRN}██║         ${YLW}╚██████╔╝${BLU}██████╔╝${MAG}██║     ${RST}                     ${WHT}│${RST}"
+    echo -e "${WHT}│${RST}          ${RED}╚═════╝ ${GRN}╚═╝          ${YLW}╚═════╝ ${BLU}╚═════╝ ${MAG}╚═╝     ${RST}                     ${WHT}│${RST}"
     echo -e "${WHT}│${RST}                                                                             ${WHT}│${RST}"
     echo -e "${WHT}│${RST}                        ${CYN}Professional UDP Tunnel Management${RST}                        ${WHT}│${RST}"
     echo -e "${WHT}├─────────────────────────────────────────────────────────────────────────────┤${RST}"
@@ -184,7 +184,6 @@ remove_tracking() {
 # ------------------ User Management with Device Binding ------------------
 add_user_core() {
     local basepass="$1" days="$2" quota="$3" devid="$4"
-    # Device binding: if devid provided, final password is basepass_devid
     if [ -n "$devid" ] && [ "$devid" != "None" ]; then
         finalpass="${basepass}_${devid}"
     else
@@ -195,7 +194,6 @@ add_user_core() {
     startdate=$(date +%Y-%m-%d)
     port=$(find_free_port)
     [ -z "$port" ] && { echo "ERROR: No free ports"; return 1; }
-    # Add to ZIVPN config
     jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
     echo "$finalpass|$exp|$quota|$port|$devid|$startdate" >> "$DB"
     echo "$finalpass|0" >> "$USAGE_DB"
@@ -233,7 +231,6 @@ update_usage_db() {
         total=$(( ${in_bytes:-0} + ${out_bytes:-0} ))
         grep -v "^$pass|" "$USAGE_DB" > /tmp/usage_tmp
         echo "$pass|$total" >> /tmp/usage_tmp; mv /tmp/usage_tmp "$USAGE_DB"
-        # Quota enforcement
         quota_bytes=$(quota_to_bytes "$quota")
         if [ $quota_bytes -gt 0 ] && [ $total -ge $quota_bytes ] && ! grep -q "^$pass|.*PAUSED" "$DB"; then
             sed -i "s|^$pass|$pass [PAUSED]|" "$DB"
