@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Professional 3D Dashboard with Device ID Binding Option
+# OP UDP PANEL – Professional 3D Dashboard with Device Binding
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -127,21 +127,28 @@ show_menu() {
     echo ""
 }
 
-# Add User (fixed prompts)
+# Add User (with device binding)
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
-    read -p "$(echo -e "${GRN}User Password : ${RST}")" pass
+    read -p "$(echo -e "${GRN}Base Password  : ${RST}")" basepass
     read -p "$(echo -e "${GRN}Validity (Days): ${RST}")" days
     read -p "$(echo -e "${GRN}Quota (GB/MB)  : ${RST}")" quota
     read -p "$(echo -e "${GRN}Device ID      : ${RST}")" devid
     echo -e "${YLW}╰──────────────────────────────────────────────────────╯${RST}"
 
+    if [ -n "$devid" ]; then
+        finalpass="${basepass}_${devid}"
+    else
+        finalpass="$basepass"
+        devid="None"
+    fi
+
     exp=$(date -d "+$days days" +%Y-%m-%d 2>/dev/null || echo "Invalid date")
 
     if [ -f "$CONFIG" ]; then
-        jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+        jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
     fi
-    echo "$pass|$exp|$quota|${devid:-None}" >> "$DB"
+    echo "$finalpass|$exp|$quota|$devid" >> "$DB"
     systemctl restart zivpn 2>/dev/null
 
     get_sysinfo
@@ -149,14 +156,16 @@ add_user() {
     echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
     echo -e "${CYN}│  ${GRN}${BOLD}🎉 NEW USER CREATED SUCCESSFULLY 🎉${RST}${CYN}                 │${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
-    echo -e "${CYN}│${RST} ${YLW}👤 Password   :${RST} ${WHT}$pass${RST}"
-    echo -e "${CYN}│${RST} ${YLW}⏳ Expiry     :${RST} ${WHT}$exp ($days Days)${RST}"
-    echo -e "${CYN}│${RST} ${YLW}📊 Quota      :${RST} ${WHT}$quota${RST}"
-    echo -e "${CYN}│${RST} ${YLW}📱 Device ID  :${RST} ${WHT}${devid:-None}${RST}"
+    echo -e "${CYN}│${RST} ${YLW}🔑 UDP Password :${RST} ${WHT}$finalpass${RST}"
+    echo -e "${CYN}│${RST}   ${DIM}(Copy the entire string above)${RST}"
+    echo -e "${CYN}│${RST}"
+    echo -e "${CYN}│${RST} ${YLW}⏳ Expiry       :${RST} ${WHT}$exp ($days Days)${RST}"
+    echo -e "${CYN}│${RST} ${YLW}📊 Quota        :${RST} ${WHT}$quota${RST}"
+    echo -e "${CYN}│${RST} ${YLW}📱 Device ID    :${RST} ${WHT}$devid${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
-    echo -e "${CYN}│${RST} ${MAG}🌍 Server IP  :${RST} ${WHT}$IP${RST}"
-    echo -e "${CYN}│${RST} ${MAG}📍 Location   :${RST} ${WHT}$CITY, $COUNTRY${RST}"
-    echo -e "${CYN}│${RST} ${MAG}🏢 ISP        :${RST} ${WHT}$ISP${RST}"
+    echo -e "${CYN}│${RST} ${MAG}🌍 Server IP    :${RST} ${WHT}$IP${RST}"
+    echo -e "${CYN}│${RST} ${MAG}📍 Location     :${RST} ${WHT}$CITY, $COUNTRY${RST}"
+    echo -e "${CYN}│${RST} ${MAG}🏢 ISP          :${RST} ${WHT}$ISP${RST}"
     echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}"
     echo ""
     read -p "Press Enter to continue..."
@@ -205,7 +214,7 @@ while true; do
         2) systemctl stop zivpn && echo -e "${RED}Stopped.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
         3) systemctl restart zivpn && echo -e "${GRN}Restarted.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
         4) systemctl status zivpn; read -p "Press Enter..." ;;
-        5) [ -f "$DB" ] && { echo -e "\n${CYN}Pass | Expiry | Quota | DeviceID${RST}"; column -t -s "|" "$DB"; } || echo -e "${RED}No users.${RST}"; read -p "Press Enter..." ;;
+        5) [ -f "$DB" ] && { echo -e "\n${CYN}Password | Expiry | Quota | DeviceID${RST}"; column -t -s "|" "$DB"; } || echo -e "${RED}No users.${RST}"; read -p "Press Enter..." ;;
         6) add_user ;;
         7) read -p "$(echo -e "${GRN}Password to remove: ${RST}")" pass
            [ -f "$CONFIG" ] && jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
