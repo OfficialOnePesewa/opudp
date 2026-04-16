@@ -1,24 +1,18 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA UDP Installer – Debian/Ubuntu
+# OFFICIAL ONEPESEWA UDP Installer – Debian/Ubuntu with Device Binding Guard
 set -e
 
-# Colors
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
-
-# Root check
 [ "$EUID" -ne 0 ] && echo -e "${R}Run as root.${NC}" && exit 1
 
-# Install essentials
 echo -e "${Y}[+] Updating & installing curl/wget...${NC}"
 apt-get update -qq
-apt-get install -y -qq curl wget
+apt-get install -y -qq curl wget tcpdump
 
-# OS info
 OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
 echo -e "${G}[+] OS: $OS${NC}"
 
-# Geo IP (ipapi.co with fallback)
-echo -e "${Y}[+] Fetching server info...${NC}"
+# Geo IP
 GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null)
 if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
     IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"
@@ -34,7 +28,6 @@ else
 fi
 LOC="$CITY, $COUNTRY"
 
-# Banner
 clear
 echo -e "${G}"
 echo "   ___  _   _ ______ _____  ______ ______ _    _ ______          _    _ ______ _____  "
@@ -66,9 +59,10 @@ case $ARCH in
 esac
 echo -e "${G}   Architecture: $ARCH -> $BIN${NC}"
 
-# Stop & remove old binary (fixes "Text file busy")
-echo -e "${Y}[*] Stopping old ZIVPN service & removing binary...${NC}"
+# Stop old services & remove binary
+echo -e "${Y}[*] Stopping old ZIVPN & guard...${NC}"
 systemctl stop zivpn 2>/dev/null || true
+systemctl stop onepesewa-guard 2>/dev/null || true
 rm -f /usr/local/bin/zivpn
 
 # Download ZIVPN binary
@@ -111,7 +105,7 @@ iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
 iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-# Systemd service
+# Systemd service for ZIVPN
 cat <<EOF > /etc/systemd/system/zivpn.service
 [Unit]
 Description=ZIVPN UDP Server
@@ -126,10 +120,6 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable zivpn
-systemctl start zivpn
-
 # Install panel
 echo -e "${Y}[+] Installing onepesewa panel...${NC}"
 wget -qO /usr/local/bin/onepesewa \
@@ -137,6 +127,36 @@ wget -qO /usr/local/bin/onepesewa \
     echo -e "${R}Failed to download panel.${NC}"; exit 1
 }
 chmod +x /usr/local/bin/onepesewa
+
+# Install Device Binding Guard
+echo -e "${Y}[+] Installing Device Binding Guard...${NC}"
+wget -qO /usr/local/bin/onepesewa-guard \
+    https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa-guard || {
+    echo -e "${R}Failed to download guard.${NC}"; exit 1
+}
+chmod +x /usr/local/bin/onepesewa-guard
+
+# Guard service
+cat <<EOF > /etc/systemd/system/onepesewa-guard.service
+[Unit]
+Description=ONEPESEWA Device Binding Guard
+After=zivpn.service
+Requires=zivpn.service
+
+[Service]
+ExecStart=/usr/local/bin/onepesewa-guard
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable zivpn
+systemctl start zivpn
+systemctl enable onepesewa-guard
+systemctl start onepesewa-guard
 
 # Final summary
 echo -e "\n${C}====================================================${NC}"
@@ -147,6 +167,7 @@ echo -e "${G} Location   :${NC} $LOC"
 echo -e "${G} ISP        :${NC} $ISP"
 echo -e "${G} ZIVPN Port :${NC} 5667 (UDP)"
 echo -e "${G} NAT Range  :${NC} 6000 - 19999"
+echo -e "${G} Device Binding Guard :${NC} ACTIVE (blocks mismatched Device IDs)"
 echo -e "${C}====================================================${NC}"
 echo -e "${Y} Type 'onepesewa' to open the panel.${NC}"
 echo -e "${C}====================================================${NC}"
