@@ -1,10 +1,10 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA UDP – Clean Animated Dashboard
+# OP UDP PANEL – Professional 3D Dashboard
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
-CACHE_FILE="/tmp/onepesewa_geo.cache"
-CACHE_TTL=300  # seconds
+CACHE_FILE="/tmp/opudp_geo.cache"
+CACHE_TTL=300
 
 # Colors
 RED='\e[1;31m' GRN='\e[1;32m' YLW='\e[1;33m' BLU='\e[1;34m' MAG='\e[1;35m' CYN='\e[1;36m' WHT='\e[1;37m' RST='\e[0m'
@@ -14,40 +14,30 @@ BOLD='\e[1m' DIM='\e[2m'
 command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 
-# --- Spinner animation ---
-spinner() {
-    local pid=$1
-    local delay=0.1
-    local spinstr='|/-\'
-    while ps -p $pid >/dev/null 2>&1; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        local spinstr=$temp${spinstr%"$temp"}
-        sleep $delay
-        printf "\b\b\b\b\b\b"
-    done
-    printf "    \b\b\b\b"
-}
-
-# --- Fetch geo data (cached) ---
+# --- Fetch Geo with fallback APIs ---
 fetch_geo() {
-    if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE"))) -lt $CACHE_TTL ]; then
+    if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
         return
     fi
 
-    printf "${DIM}Fetching server info...${RST}"
-    GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null) &
-    spinner $!
-    wait $!
+    printf "${DIM}Fetching location...${RST}"
+    GEO=""
+    for api in "https://ipapi.co/json/" "https://ipinfo.io/json" "https://ifconfig.co/json"; do
+        GEO=$(curl -4 -s --max-time 5 "$api" 2>/dev/null)
+        if [ -n "$GEO" ] && echo "$GEO" | grep -q '"ip"'; then
+            break
+        fi
+    done
 
-    if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
+    if [ -z "$GEO" ]; then
         IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"; ZIP=""; COUNTRY_CODE=""
     else
         IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
         CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
-        COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
-        COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country_code":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
+        COUNTRY=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | head -1)
+        [ -z "$COUNTRY" ] && COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
+        COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
         ZIP=$(echo "$GEO" | grep -oP '"postal":\s*"\K[^"]+')
         ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
         [ -z "$IP" ] && IP="N/A"
@@ -56,8 +46,8 @@ fetch_geo() {
         [ -z "$ISP" ] && ISP="Unknown"
     fi
 
-    # Save cache
     echo "IP=\"$IP\"; CITY=\"$CITY\"; COUNTRY=\"$COUNTRY\"; COUNTRY_CODE=\"$COUNTRY_CODE\"; ZIP=\"$ZIP\"; ISP=\"$ISP\"" > "$CACHE_FILE"
+    printf "\r\033[K"  # clear spinner line
 }
 
 # Flag emoji
@@ -66,11 +56,12 @@ flag() {
         us) echo "🇺🇸" ;; gb) echo "🇬🇧" ;; ca) echo "🇨🇦" ;; au) echo "🇦🇺" ;;
         de) echo "🇩🇪" ;; fr) echo "🇫🇷" ;; nl) echo "🇳🇱" ;; in) echo "🇮🇳" ;;
         jp) echo "🇯🇵" ;; br) echo "🇧🇷" ;; za) echo "🇿🇦" ;; sg) echo "🇸🇬" ;;
-        gh) echo "🇬🇭" ;; ng) echo "🇳🇬" ;; ke) echo "🇰🇪" ;; *) echo "" ;;
+        gh) echo "🇬🇭" ;; ng) echo "🇳🇬" ;; ke) echo "🇰🇪" ;; il) echo "🇮🇱" ;;
+        *) echo "" ;;
     esac
 }
 
-# System info (cached per screen refresh)
+# System info (cached per refresh)
 get_sysinfo() {
     OS_INFO=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
     UPTIME=$(uptime -p | sed 's/up //; s/ days/d/; s/ day/d/; s/ hours/h/; s/ hour/h/; s/ minutes/m/; s/ minute/m/')
@@ -83,16 +74,30 @@ get_sysinfo() {
     fi
 
     USER_COUNT=$(jq '.auth.config | length' "$CONFIG" 2>/dev/null || echo "0")
-    DATE_TIME=$(date +"%a %d %b %Y   %H:%M:%S")
+    DATE_TIME=$(date +"%a %d %b %Y  %I:%M:%S %p %Z")
     FLAG=$(flag "$COUNTRY_CODE")
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
-# --- Banner (clean box style) ---
-banner() {
+# --- 3D ASCII Header "OP UDP PANEL" ---
+print_header() {
     clear
-    get_sysinfo
+    echo -e "${WHT}${BOLD}"
+    echo "   ██████╗ ██████╗     ██╗   ██╗██████╗ ██████╗     ██████╗  █████╗ ███╗   ██╗███████╗██╗     "
+    echo "  ██╔═══██╗██╔══██╗    ██║   ██║██╔══██╗██╔══██╗    ██╔══██╗██╔══██╗████╗  ██║██╔════╝██║     "
+    echo "  ██║   ██║██████╔╝    ██║   ██║██║  ██║██████╔╝    ██████╔╝███████║██╔██╗ ██║█████╗  ██║     "
+    echo "  ██║   ██║██╔═══╝     ██║   ██║██║  ██║██╔═══╝     ██╔═══╝ ██╔══██║██║╚██╗██║██╔══╝  ██║     "
+    echo "  ╚██████╔╝██║         ╚██████╔╝██████╔╝██║         ██║     ██║  ██║██║ ╚████║███████╗███████╗"
+    echo "   ╚═════╝ ╚═╝          ╚═════╝ ╚═════╝ ╚═╝         ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝"
+    echo -e "${RST}"
+    echo -e "${CYN}                        Professional UDP Tunnel Management${RST}"
+    echo ""
+}
 
+# --- Banner Info Box ---
+banner() {
+    get_sysinfo
+    print_header
     echo -e "${WHT}╭─────────────────────────────────────────────────────────────╮${RST}"
     echo -e "${WHT}│${RST}  ${BOLD}🕐  $DATE_TIME${RST}                                   ${WHT}│${RST}"
     echo -e "${WHT}├─────────────────────────────────────────────────────────────┤${RST}"
@@ -109,7 +114,20 @@ banner() {
     echo ""
 }
 
-# --- Add user with card ---
+# --- Professional Menu (aligned columns) ---
+show_menu() {
+    printf "${WHT}╭──────────────────────────────────────────────────────────────────────╮${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}1)${RST} Start      ${GRN}2)${RST} Stop       ${GRN}3)${RST} Restart    ${GRN}4)${RST} Status       ${GRN}5)${RST} List        ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}6)${RST} Add User   ${GRN}7)${RST} Remove     ${GRN}8)${RST} Renew      ${GRN}9)${RST} Cleanup      ${GRN}10)${RST} Conn Stats  ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}11)${RST} BW+Expiry ${GRN}12)${RST} Reset BW   ${GRN}13)${RST} Speed Test ${GRN}14)${RST} Live Logs    ${GRN}15)${RST} Backup      ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}16)${RST} Restore   ${GRN}17)${RST} Port Range ${GRN}18)${RST} ${YLW}Update${RST}     ${GRN}19)${RST} Conn Limit   ${GRN}20)${RST} Trial User  ${WHT}│${RST}\n"
+    printf "${WHT}├──────────────────────────────────────────────────────────────────────┤${RST}\n"
+    printf "${WHT}│${RST}  ${RED}99) UNINSTALL${RST}                                                ${GRN}0) Exit${RST}  ${WHT}│${RST}\n"
+    printf "${WHT}╰──────────────────────────────────────────────────────────────────────╯${RST}\n"
+    echo ""
+}
+
+# --- Attractive User Card ---
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
     echo -ne "${GRN}│ User Password : ${RST}"; read pass
@@ -168,7 +186,7 @@ goodbye() {
     echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
     echo -e "${CYN}│                                                      │${RST}"
     echo -e "${CYN}│      ${GRN}Thank you for using${RST}${CYN}                            │${RST}"
-    echo -e "${CYN}│      ${YLW}OFFICIAL ONEPESEWA UDP${RST}${CYN}                         │${RST}"
+    echo -e "${CYN}│      ${YLW}OP UDP PANEL${RST}${CYN}                                 │${RST}"
     echo -e "${CYN}│      ${MAG}See you again soon! 👋${RST}${CYN}                         │${RST}"
     echo -e "${CYN}│                                                      │${RST}"
     echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}"
@@ -176,21 +194,7 @@ goodbye() {
     echo -e "${WHT}Channel : ${CYN}https://t.me/OfficialOnePesewa${RST}\n"
 }
 
-# Menu (clean grid)
-show_menu() {
-    echo -e "${WHT}╭─────────────────────────────────────────────────────────────╮${RST}"
-    echo -e "${WHT}│  ${GRN} 1)${RST} Start   ${GRN} 6)${RST} Add User     ${GRN}11)${RST} BW+Expiry  ${GRN}16)${RST} Restore      ${WHT}│${RST}"
-    echo -e "${WHT}│  ${GRN} 2)${RST} Stop    ${GRN} 7)${RST} Remove User  ${GRN}12)${RST} Reset BW   ${GRN}17)${RST} Port Range   ${WHT}│${RST}"
-    echo -e "${WHT}│  ${GRN} 3)${RST} Restart ${GRN} 8)${RST} Renew/Extend ${GRN}13)${RST} Speed Test ${GRN}18)${RST} ${YLW}Update Panel${RST} ${WHT}│${RST}"
-    echo -e "${WHT}│  ${GRN} 4)${RST} Status  ${GRN} 9)${RST} Cleanup      ${GRN}14)${RST} Live Logs  ${GRN}19)${RST} Conn Limit   ${WHT}│${RST}"
-    echo -e "${WHT}│  ${GRN} 5)${RST} List    ${GRN}10)${RST} Conn Stats   ${GRN}15)${RST} Backup     ${GRN}20)${RST} Trial User   ${WHT}│${RST}"
-    echo -e "${WHT}├─────────────────────────────────────────────────────────────┤${RST}"
-    echo -e "${WHT}│  ${RED}99) UNINSTALL${RST}                                      ${GRN} 0) Exit${RST}  ${WHT}│${RST}"
-    echo -e "${WHT}╰─────────────────────────────────────────────────────────────╯${RST}"
-    echo ""
-}
-
-# --- Main loop ---
+# --- Main Loop ---
 fetch_geo   # pre‑fetch on start
 while true; do
     banner
