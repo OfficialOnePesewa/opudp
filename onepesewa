@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Bandwidth Tracking Fixed (Mangle Table)
+# OP UDP PANEL – Full Feature Edition with Repair Tracking
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -18,7 +18,7 @@ command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 command -v speedtest-cli &>/dev/null || apt-get install -y speedtest-cli -qq 2>/dev/null
 
-# --- Geo fetch ---
+# --- Geo fetch with fallbacks ---
 fetch_geo() {
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
@@ -115,7 +115,7 @@ show_menu() {
     printf "${WHT}│${RST}  ${GRN}6)${RST} Add User   ${GRN}7)${RST} Remove     ${GRN}8)${RST} Renew      ${GRN}9)${RST} Cleanup      ${GRN}10)${RST} Usage Stats ${WHT}│${RST}\n"
     printf "${WHT}│${RST}  ${GRN}11)${RST} BW+Expiry ${GRN}12)${RST} Reset BW   ${GRN}13)${RST} Speed Test ${GRN}14)${RST} Live Logs    ${GRN}15)${RST} Backup      ${WHT}│${RST}\n"
     printf "${WHT}│${RST}  ${GRN}16)${RST} Restore   ${GRN}17)${RST} Port Range ${GRN}18)${RST} ${YLW}Update${RST}     ${GRN}19)${RST} Conn Limit   ${GRN}20)${RST} Trial User  ${WHT}│${RST}\n"
-    printf "${WHT}│${RST}  ${GRN}21)${RST} User Info  ${GRN}22)${RST} ${CYN}Diag Test${RST}                                            ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}21)${RST} User Info  ${GRN}22)${RST} Repair Tracking                                  ${WHT}│${RST}\n"
     printf "${WHT}├──────────────────────────────────────────────────────────────────────┤${RST}\n"
     printf "${WHT}│${RST}  ${RED}99) UNINSTALL${RST}                                                ${GRN}0) Exit${RST}  ${WHT}│${RST}\n"
     printf "${WHT}╰──────────────────────────────────────────────────────────────────────╯${RST}\n"
@@ -149,31 +149,50 @@ format_bytes() {
     else echo "$b B"; fi
 }
 
-# --- NEW: Corrected tracking using mangle table ---
 setup_tracking() {
     local port=$1
     iptables -I INPUT -p udp --dport $port -j ACCEPT 2>/dev/null
     iptables -t nat -A PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
-    iptables -t mangle -N UDP_IN_$port 2>/dev/null
-    iptables -N UDP_OUT_$port 2>/dev/null
-    iptables -t mangle -I PREROUTING -p udp --dport $port -j UDP_IN_$port 2>/dev/null
+    iptables -N UDP_IN_$port 2>/dev/null; iptables -N UDP_OUT_$port 2>/dev/null
+    iptables -I INPUT -p udp --dport $port -j UDP_IN_$port 2>/dev/null
     iptables -I OUTPUT -p udp --sport $port -j UDP_OUT_$port 2>/dev/null
 }
 
 remove_tracking() {
     local port=$1
-    iptables -t mangle -D PREROUTING -p udp --dport $port -j UDP_IN_$port 2>/dev/null
+    iptables -D INPUT -p udp --dport $port -j UDP_IN_$port 2>/dev/null
     iptables -D OUTPUT -p udp --sport $port -j UDP_OUT_$port 2>/dev/null
-    iptables -t mangle -F UDP_IN_$port 2>/dev/null; iptables -t mangle -X UDP_IN_$port 2>/dev/null
+    iptables -F UDP_IN_$port 2>/dev/null; iptables -X UDP_IN_$port 2>/dev/null
     iptables -F UDP_OUT_$port 2>/dev/null; iptables -X UDP_OUT_$port 2>/dev/null
     iptables -D INPUT -p udp --dport $port -j ACCEPT 2>/dev/null
     iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
 }
 
+repair_tracking() {
+    echo -e "\n${YLW}Repairing iptables tracking for all users...${RST}"
+    local repaired=0
+    while IFS='|' read -r pass expiry quota port deviceid startdate; do
+        if [ -n "$port" ] && [ "$port" != "None" ]; then
+            # Check if chains exist; if not, create them
+            if ! iptables -L UDP_IN_$port &>/dev/null; then
+                echo "  Fixing port $port for user $pass"
+                setup_tracking "$port"
+                repaired=$((repaired+1))
+            fi
+            # Ensure NAT rule exists
+            if ! iptables -t nat -C PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null; then
+                iptables -t nat -A PREROUTING -p udp --dport $port -j DNAT --to-destination :5667
+            fi
+        fi
+    done < "$DB"
+    echo -e "${GRN}Repaired $repaired user(s).${RST}"
+    read -p "Press Enter to continue..."
+}
+
 update_usage_db() {
     while IFS='|' read -r pass expiry quota port deviceid startdate; do
         if [ -n "$port" ] && [ "$port" != "None" ]; then
-            in_bytes=$(iptables -t mangle -L UDP_IN_$port -v -x 2>/dev/null | grep -oP '\d+' | head -1)
+            in_bytes=$(iptables -L UDP_IN_$port -v -x 2>/dev/null | grep -oP '\d+' | head -1)
             out_bytes=$(iptables -L UDP_OUT_$port -v -x 2>/dev/null | grep -oP '\d+' | head -1)
             total=$(( ${in_bytes:-0} + ${out_bytes:-0} ))
             grep -v "^$pass|" "$USAGE_DB" 2>/dev/null > /tmp/usage_tmp
@@ -203,28 +222,6 @@ install_cron() {
         chmod 644 /etc/cron.d/opudp_bandwidth
         systemctl restart cron 2>/dev/null
     fi
-}
-
-# --- Diagnostic test for bandwidth counting ---
-diag_test() {
-    read -p "$(echo -e "${GRN}Enter user password to test: ${RST}")" pass
-    user_data=$(grep "^$pass|" "$DB" 2>/dev/null)
-    if [ -z "$user_data" ]; then
-        echo -e "${RED}User not found.${RST}"
-        read -p "Press Enter..."
-        return
-    fi
-    port=$(echo "$user_data" | cut -d'|' -f4)
-    echo -e "${YLW}Current iptables counters for port $port:${RST}"
-    echo "Incoming bytes (mangle UDP_IN_$port):"
-    iptables -t mangle -L UDP_IN_$port -v -x 2>/dev/null || echo "Chain not found!"
-    echo "Outgoing bytes (OUTPUT UDP_OUT_$port):"
-    iptables -L UDP_OUT_$port -v -x 2>/dev/null || echo "Chain not found!"
-    echo -e "\n${YLW}Running usage update now...${RST}"
-    update_usage_db
-    used=$(get_usage "$pass")
-    echo -e "${GRN}Usage recorded: $(format_bytes ${used:-0})${RST}"
-    read -p "Press Enter..."
 }
 
 # --- Feature Implementations ---
@@ -356,8 +353,7 @@ reset_bandwidth() {
     read -p "$(echo -e "${GRN}Password to reset bandwidth: ${RST}")" pass
     port=$(grep "^$pass|" "$DB" | cut -d'|' -f4)
     if [ -n "$port" ]; then
-        iptables -t mangle -Z UDP_IN_$port 2>/dev/null
-        iptables -Z UDP_OUT_$port 2>/dev/null
+        iptables -Z UDP_IN_$port 2>/dev/null; iptables -Z UDP_OUT_$port 2>/dev/null
         sed -i "s|^$pass|.*|$pass|0|" "$USAGE_DB"
         echo -e "${GRN}Bandwidth reset.${RST}"
     else echo -e "${RED}User not found.${RST}"; fi
@@ -403,7 +399,7 @@ change_port_range() {
 set_conn_limit() {
     read -p "Max connections per user: " limit
     echo "$limit" > /etc/zivpn/conn_limit
-    echo -e "${GRN}Connection limit set to $limit.${RST}"
+    echo -e "${GRN}Connection limit set to $limit (requires iptables connlimit module).${RST}"
     read -p "Press Enter..."
 }
 
@@ -415,11 +411,11 @@ trial_user() {
     if [ -f "$CONFIG" ]; then jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"; fi
     exp=$(date -d "+1 days" +%Y-%m-%d)
     startdate=$(date +%Y-%m-%d)
-    echo "$pass|$exp|50MB|$port|trial|$startdate" >> "$DB"
+    echo "$pass|$exp|100MB|$port|trial|$startdate" >> "$DB"
     echo "$pass|0" >> "$USAGE_DB"
     setup_tracking "$port"
     systemctl restart zivpn 2>/dev/null
-    echo -e "${GRN}Trial Created: ${YLW}$pass${GRN} (Port $port, Expires in $mins mins, Quota 50MB)${RST}"
+    echo -e "${GRN}Trial Created: ${YLW}$pass${GRN} (Port $port, Expires in $mins mins)${RST}"
     ( sleep $((mins*60))
       remove_tracking "$port"
       [ -f "$CONFIG" ] && jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
@@ -454,7 +450,7 @@ fetch_geo
 
 # Main loop
 while true; do
-    install_cron
+    install_cron  # ensure cron is present on every loop start
     banner
     show_menu
     read -p "$(echo -e "${CYN}Choose [0-99]: ${RST}")" opt
@@ -483,7 +479,7 @@ while true; do
         19) set_conn_limit ;;
         20) trial_user ;;
         21) user_info ;;
-        22) diag_test ;;
+        22) repair_tracking ;;
         99) systemctl stop zivpn 2>/dev/null
             rm -rf /etc/zivpn /usr/local/bin/zivpn /usr/local/bin/onepesewa /etc/cron.d/opudp_bandwidth
             echo -e "${RED}Uninstalled.${RST}"; exit ;;
