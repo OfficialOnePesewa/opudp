@@ -1,5 +1,8 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – With Verified Binary URLs
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Builds UDP Custom from Source
+# Works on Debian 10/11/12 & Ubuntu 20.04/22.04/24.04
+# One-liner: bash <(curl -fsSL https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh)
+
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
@@ -7,7 +10,7 @@ G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
 
 echo -e "${Y}[+] Updating system & installing dependencies...${NC}"
 apt-get update -qq
-apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip
+apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip golang-go
 
 OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
 echo -e "${G}[+] OS: $OS${NC}"
@@ -93,36 +96,34 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Install UDP Custom (Verified URLs) ------------------
-echo -e "${Y}[2/6] Installing UDP Custom...${NC}"
+# ------------------ Build UDP Custom from Source ------------------
+echo -e "${Y}[2/6] Building UDP Custom from source...${NC}"
 mkdir -p /root/udp
 cd /root
 
-# List of verified URLs with specific version tags
-URLS=(
-    "https://github.com/eooce/udp-custom/releases/download/v1.0.5/udp-custom-linux-amd64"
-    "https://github.com/http-custom/udp-custom/releases/download/1.0.5/udp-custom-linux-amd64"
-    "https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/bin/udp-custom-linux-amd64"
-)
+# Clone the repository
+rm -rf udp-custom-build
+git clone https://github.com/http-custom/udp-custom udp-custom-build
+cd udp-custom-build
 
-downloaded=false
-for url in "${URLS[@]}"; do
-    echo -e "${Y}[*] Trying: $url${NC}"
-    wget -qO /root/udp/udp-custom "$url" || true
-    if [ -s /root/udp/udp-custom ]; then
-        echo -e "${G}[✓] Downloaded ($(stat -c%s /root/udp/udp-custom) bytes)${NC}"
-        downloaded=true
-        break
-    fi
-done
-
-if [ "$downloaded" = false ]; then
-    echo -e "${R}[✗] All downloads failed. Please run manual fix.${NC}"
-    exit 1
+# Build the binary (the repository contains a Makefile or build script)
+if [ -f "Makefile" ]; then
+    make
+    cp udp-custom /root/udp/
+elif [ -f "build.sh" ]; then
+    chmod +x build.sh && ./build.sh
+    cp udp-custom /root/udp/
+else
+    # Fallback: build the main Go file directly
+    go build -o udp-custom main.go || go build -o udp-custom .
+    cp udp-custom /root/udp/
 fi
 
+cd /root
 chmod +x /root/udp/udp-custom
+rm -rf udp-custom-build
 
+# Generate random port between 50000 and 55000
 UDPC_PORT=$((50000 + RANDOM % 5000))
 echo -e "${G}[*] UDP Custom port: $UDPC_PORT${NC}"
 
@@ -173,7 +174,7 @@ iptables -I INPUT -p tcp --dport 7800 -j ACCEPT 2>/dev/null || true
 
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-# ------------------ Panel ------------------
+# ------------------ Install Panel ------------------
 echo -e "${Y}[4/6] Installing OP UDP Panel...${NC}"
 for i in 1 2 3; do
     wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa && break
