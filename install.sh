@@ -1,8 +1,5 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Final Robust Version
-# Works on Debian 10/11/12 & Ubuntu 20.04/22.04/24.04
-# One-liner: bash <(curl -fsSL https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh)
-
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – With Verified Binary URLs
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
@@ -96,47 +93,36 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Install UDP Custom (Multi-Source with Validation) ------------------
+# ------------------ Install UDP Custom (Verified URLs) ------------------
 echo -e "${Y}[2/6] Installing UDP Custom...${NC}"
 mkdir -p /root/udp
 cd /root
 
-# Download with multiple fallbacks and size validation
-download_udpc() {
-    local url=$1
-    wget -qO /root/udp/udp-custom "$url"
-    if [ -s /root/udp/udp-custom ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# List of reliable URLs (ordered by preference)
+# List of verified URLs with specific version tags
 URLS=(
-    "https://github.com/eooce/udp-custom/releases/download/latest/udp-custom-linux-amd64"
-    "https://github.com/http-custom/udp-custom/releases/download/latest/udp-custom-linux-amd64"
+    "https://github.com/eooce/udp-custom/releases/download/v1.0.5/udp-custom-linux-amd64"
+    "https://github.com/http-custom/udp-custom/releases/download/1.0.5/udp-custom-linux-amd64"
     "https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/bin/udp-custom-linux-amd64"
 )
 
 downloaded=false
 for url in "${URLS[@]}"; do
     echo -e "${Y}[*] Trying: $url${NC}"
-    if download_udpc "$url"; then
-        echo -e "${G}[✓] UDP Custom binary downloaded successfully ($(stat -c%s /root/udp/udp-custom) bytes)${NC}"
+    wget -qO /root/udp/udp-custom "$url" || true
+    if [ -s /root/udp/udp-custom ]; then
+        echo -e "${G}[✓] Downloaded ($(stat -c%s /root/udp/udp-custom) bytes)${NC}"
         downloaded=true
         break
     fi
 done
 
 if [ "$downloaded" = false ]; then
-    echo -e "${R}[✗] Failed to download UDP Custom binary. Please check your internet connection.${NC}"
+    echo -e "${R}[✗] All downloads failed. Please run manual fix.${NC}"
     exit 1
 fi
 
 chmod +x /root/udp/udp-custom
 
-# Generate random port between 50000 and 55000
 UDPC_PORT=$((50000 + RANDOM % 5000))
 echo -e "${G}[*] UDP Custom port: $UDPC_PORT${NC}"
 
@@ -187,7 +173,7 @@ iptables -I INPUT -p tcp --dport 7800 -j ACCEPT 2>/dev/null || true
 
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-# ------------------ Install Panel ------------------
+# ------------------ Panel ------------------
 echo -e "${Y}[4/6] Installing OP UDP Panel...${NC}"
 for i in 1 2 3; do
     wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa && break
@@ -200,8 +186,7 @@ ln -sf /usr/local/bin/onepesewa /usr/local/bin/udp
 echo -e "${Y}[5/6] Setting up Telegram bot (optional)...${NC}"
 set +e
 pip3 install --quiet python-telegram-bot==20.3 2>/dev/null || \
-pip3 install --break-system-packages --quiet python-telegram-bot==20.3 2>/dev/null || \
-{ echo -e "${Y}[!] Telegram bot dependencies skipped.${NC}"; }
+pip3 install --break-system-packages --quiet python-telegram-bot==20.3 2>/dev/null || true
 set -e
 
 wget -qO /usr/local/bin/opudp_bot.py https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/opudp_bot.py
@@ -235,7 +220,6 @@ systemctl start udp-custom
 
 sleep 3
 
-# ------------------ Final Summary ------------------
 echo -e "\n${C}====================================================${NC}"
 echo -e "${G}         INSTALLATION COMPLETE!${NC}"
 echo -e "${C}====================================================${NC}"
@@ -255,7 +239,7 @@ fi
 if systemctl is-active --quiet udp-custom; then
     echo -e "${G}✅ UDP Custom is running${NC}"
 else
-    echo -e "${R}❌ UDP Custom failed to start. Check: journalctl -u udp-custom --no-pager -n 10${NC}"
+    echo -e "${R}❌ UDP Custom failed to start.${NC}"
 fi
 
 echo -e "${C}====================================================${NC}"
