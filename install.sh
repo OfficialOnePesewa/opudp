@@ -1,5 +1,5 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Single Command Management
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Robust Edition
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
@@ -7,7 +7,7 @@ G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
 
 echo -e "${Y}[+] Updating system & installing dependencies...${NC}"
 apt-get update -qq
-apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git
+apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip
 
 # OS info
 OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
@@ -45,6 +45,10 @@ echo "  ISP      : $ISP"
 echo "  Admin    : @OfficialOnePesewa"
 echo "---------------------------------------------------"
 
+# ------------------ Stop any previous services ------------------
+systemctl stop zivpn 2>/dev/null || true
+systemctl stop udp-custom 2>/dev/null || true
+
 # ------------------ Install ZIVPN ------------------
 echo -e "${Y}[1/7] Installing ZIVPN...${NC}"
 ARCH=$(uname -m)
@@ -54,9 +58,7 @@ case $ARCH in
     *) echo -e "${R}Unsupported: $ARCH${NC}"; exit 1 ;;
 esac
 
-systemctl stop zivpn 2>/dev/null || true
 rm -f /usr/local/bin/zivpn
-
 wget -q --show-progress -O /usr/local/bin/zivpn \
     "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-$BIN"
 chmod +x /usr/local/bin/zivpn
@@ -94,18 +96,44 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Install UDP Custom ------------------
+# ------------------ Install UDP Custom (Robust) ------------------
 echo -e "${Y}[2/7] Installing UDP Custom...${NC}"
 cd /root
 rm -rf udp-custom-2 2>/dev/null
-git clone https://github.com/http-custom/udp-custom udp-custom-2
-cd udp-custom-2
-chmod +x install.sh
-./install.sh || true
+git clone https://github.com/http-custom/udp-custom udp-custom-2 || {
+    echo -e "${Y}[!] Git clone failed, using fallback binary...${NC}"
+    mkdir -p /root/udp
+    wget -qO /root/udp/udp-custom https://github.com/http-custom/udp-custom/releases/download/latest/udp-custom-linux-amd64
+    chmod +x /root/udp/udp-custom
+}
+cd udp-custom-2 2>/dev/null && {
+    chmod +x install.sh
+    ./install.sh || true
+    # Ensure binary exists
+    [ ! -f /root/udp/udp-custom ] && cp udp-custom /root/udp/ 2>/dev/null || true
+}
 
-# Remove standalone udp command (we use onepesewa for everything)
-rm -f /usr/local/bin/udp
+# Ensure config.json exists
+[ ! -f /root/udp/config.json ] && cat <<EOF > /root/udp/config.json
+{
+  "listen": ":36712",
+  "gateway": ":7800",
+  "cert": "/root/udp/server.crt",
+  "key": "/root/udp/server.key"
+}
+EOF
 
+# Generate SSL if missing
+if [ ! -f /root/udp/server.crt ]; then
+    openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
+        -subj "/C=GH/ST=Accra/L=Accra/O=OnePesewa/CN=udp-custom" \
+        -keyout "/root/udp/server.key" -out "/root/udp/server.crt" 2>/dev/null
+fi
+
+# Create users.json if missing
+[ ! -f /root/udp/users.json ] && echo '{}' > /root/udp/users.json
+
+# Create systemd service
 cat > /etc/systemd/system/udp-custom.service << 'EOF'
 [Unit]
 Description=UDP Custom Server
@@ -122,22 +150,26 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+# Remove standalone udp command
+rm -f /usr/local/bin/udp
+
 # ------------------ Firewall Rules ------------------
 echo -e "${Y}[3/7] Configuring firewall...${NC}"
+# ZIVPN
 iptables -I INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
 iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
+# UDP Custom
 iptables -I INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 7800 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p tcp --dport 7800 -j ACCEPT 2>/dev/null || true
+
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
 # ------------------ Install Unified Panel ------------------
-echo -e "${Y}[4/7] Installing unified OP UDP Panel...${NC}"
+echo -e "${Y}[4/7] Installing OP UDP Panel...${NC}"
 wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
 chmod +x /usr/local/bin/onepesewa
-
-# Create alias so 'udp' also opens the panel
 ln -sf /usr/local/bin/onepesewa /usr/local/bin/udp
 
 # ------------------ Telegram Bot ------------------
@@ -160,7 +192,7 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Enable Services ------------------
+# ------------------ Enable & Start Services ------------------
 echo -e "${Y}[6/7] Starting services...${NC}"
 systemctl daemon-reload
 systemctl enable zivpn udp-custom opudp-bot
@@ -168,7 +200,8 @@ systemctl start zivpn
 systemctl start udp-custom
 systemctl start opudp-bot 2>/dev/null || true
 
-# ------------------ Final Summary ------------------
+# ------------------ Final Verification ------------------
+sleep 3
 echo -e "\n${C}====================================================${NC}"
 echo -e "${G}         INSTALLATION COMPLETE!${NC}"
 echo -e "${C}====================================================${NC}"
@@ -177,6 +210,21 @@ echo -e "${G} Location    :${NC} $CITY, $COUNTRY"
 echo -e "${G} ISP         :${NC} $ISP"
 echo -e "${G} ZIVPN Port  :${NC} 5667 (NAT 6000-19999)"
 echo -e "${G} UDP Custom  :${NC} 36712 (Gateway 7800)"
+echo -e "${C}====================================================${NC}"
+
+# Check service status
+if systemctl is-active --quiet zivpn; then
+    echo -e "${G}✅ ZIVPN is running${NC}"
+else
+    echo -e "${R}❌ ZIVPN failed to start. Check: journalctl -u zivpn${NC}"
+fi
+
+if systemctl is-active --quiet udp-custom; then
+    echo -e "${G}✅ UDP Custom is running${NC}"
+else
+    echo -e "${R}❌ UDP Custom failed to start. Check: journalctl -u udp-custom${NC}"
+fi
+
 echo -e "${C}====================================================${NC}"
 echo -e "${Y} Type 'onepesewa' (or 'udp') to open the control panel.${NC}"
 echo -e "${C}====================================================${NC}"
