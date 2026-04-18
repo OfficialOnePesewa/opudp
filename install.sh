@@ -1,11 +1,18 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Verified Panel Download
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Final Working Version
+# Supports ZIVPN (port 5667) + UDP Custom (port 55000) – No Conflicts
+# One-liner: bash <(curl -fsSL https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh)
+
 set -e
 
+# Colors
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
+
+# Root check
 [ "$EUID" -ne 0 ] && echo -e "${R}Run as root.${NC}" && exit 1
 
-echo -e "${Y}[+] Updating system & installing dependencies...${NC}"
+# Update system and install dependencies
+echo -e "${Y}[+] Updating system and installing dependencies...${NC}"
 apt-get update -qq
 apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip
 
@@ -96,16 +103,18 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Install UDP Custom ------------------
-echo -e "${Y}[2/7] Installing UDP Custom...${NC}"
+# ------------------ Install UDP Custom (Port 55000) ------------------
+echo -e "${Y}[2/7] Installing UDP Custom on port 55000...${NC}"
 mkdir -p /root/udp
 cd /root
 
+# Download precompiled binary
 if [ ! -f /root/udp/udp-custom ]; then
     wget -qO /root/udp/udp-custom https://github.com/http-custom/udp-custom/releases/download/latest/udp-custom-linux-amd64
     chmod +x /root/udp/udp-custom
 fi
 
+# Fallback build from source if binary fails
 if [ ! -f /root/udp/udp-custom ] || ! /root/udp/udp-custom --version &>/dev/null; then
     echo -e "${Y}[*] Building UDP Custom from source...${NC}"
     rm -rf udp-custom-2
@@ -117,23 +126,27 @@ if [ ! -f /root/udp/udp-custom ] || ! /root/udp/udp-custom --version &>/dev/null
     cd /root
 fi
 
-[ ! -f /root/udp/config.json ] && cat <<EOF > /root/udp/config.json
+# Config with port 55000 to avoid ZIVPN conflict
+cat <<EOF > /root/udp/config.json
 {
-  "listen": ":36712",
+  "listen": ":55000",
   "gateway": ":7800",
   "cert": "/root/udp/server.crt",
   "key": "/root/udp/server.key"
 }
 EOF
 
+# SSL cert
 if [ ! -f /root/udp/server.crt ]; then
     openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
         -subj "/C=GH/ST=Accra/L=Accra/O=OnePesewa/CN=udp-custom" \
         -keyout "/root/udp/server.key" -out "/root/udp/server.crt" 2>/dev/null
 fi
 
+# Users database
 [ ! -f /root/udp/users.json ] && echo '{}' > /root/udp/users.json
 
+# Systemd service
 cat <<EOF > /etc/systemd/system/udp-custom.service
 [Unit]
 Description=UDP Custom Server
@@ -150,54 +163,31 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+# Remove standalone udp command (we use onepesewa)
 rm -f /usr/local/bin/udp
 
 # ------------------ Firewall Rules ------------------
 echo -e "${Y}[3/7] Configuring firewall...${NC}"
+# ZIVPN
 iptables -I INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
 iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
-iptables -I INPUT -p udp --dport 36712 -j ACCEPT 2>/dev/null || true
+
+# UDP Custom (new port 55000, gateway 7800)
+iptables -I INPUT -p udp --dport 55000 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 7800 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p tcp --dport 7800 -j ACCEPT 2>/dev/null || true
+
+# Save rules
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 
-# ------------------ Install Unified Panel (with verification) ------------------
+# ------------------ Install Unified Panel ------------------
 echo -e "${Y}[4/7] Installing OP UDP Panel...${NC}"
-download_panel() {
-    wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
-    chmod +x /usr/local/bin/onepesewa
-}
-
-# Try up to 3 times
-for i in 1 2 3; do
-    download_panel && break || sleep 2
-done
-
-# Verify download
-if [ ! -f /usr/local/bin/onepesewa ] || [ ! -s /usr/local/bin/onepesewa ]; then
-    echo -e "${R}Failed to download panel. Using embedded fallback...${NC}"
-    # Fallback: minimal panel
-    cat > /usr/local/bin/onepesewa << 'FALLBACK'
-#!/bin/bash
-echo "OP UDP Panel - Minimal Mode"
-echo "1) Start Services  2) Stop Services  3) Status  4) Exit"
-while true; do
-    read -p "Choice: " c
-    case $c in
-        1) systemctl start zivpn udp-custom;;
-        2) systemctl stop zivpn udp-custom;;
-        3) systemctl status zivpn --no-pager; systemctl status udp-custom --no-pager;;
-        4) exit;;
-    esac
-done
-FALLBACK
-    chmod +x /usr/local/bin/onepesewa
-fi
-
+wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
+chmod +x /usr/local/bin/onepesewa
 ln -sf /usr/local/bin/onepesewa /usr/local/bin/udp
 
-# ------------------ Telegram Bot ------------------
+# ------------------ Telegram Bot (Optional) ------------------
 echo -e "${Y}[5/7] Setting up Telegram bot...${NC}"
 pip3 install --quiet python-telegram-bot==20.3
 wget -qO /usr/local/bin/opudp_bot.py https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/opudp_bot.py
@@ -235,7 +225,7 @@ echo -e "${G} Server IP   :${NC} $IP"
 echo -e "${G} Location    :${NC} $CITY, $COUNTRY"
 echo -e "${G} ISP         :${NC} $ISP"
 echo -e "${G} ZIVPN Port  :${NC} 5667 (NAT 6000-19999)"
-echo -e "${G} UDP Custom  :${NC} 36712 (Gateway 7800)"
+echo -e "${G} UDP Custom  :${NC} 55000 (Gateway 7800)"
 echo -e "${C}====================================================${NC}"
 
 if systemctl is-active --quiet zivpn; then
