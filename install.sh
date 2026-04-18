@@ -1,5 +1,5 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – With VPS Optimizer + BadVPN UDPGW
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – With SSH Protection
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
@@ -160,7 +160,6 @@ echo -e "${Y}[4/7] Installing BadVPN UDPGW (VoIP/Gaming support)...${NC}"
 cd /root
 rm -rf badvpn-build
 
-# Clone and compile only udpgw
 git clone https://github.com/ambrop72/badvpn.git badvpn-build
 cd badvpn-build
 mkdir -p build
@@ -171,7 +170,6 @@ cp udpgw/badvpn-udpgw /usr/local/bin/
 cd /root
 rm -rf badvpn-build
 
-# Create systemd service
 cat <<EOF > /etc/systemd/system/badvpn-gateway.service
 [Unit]
 Description=BadVPN UDP Gateway for VoIP/Gaming
@@ -187,20 +185,33 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Firewall ------------------
-echo -e "${Y}[5/7] Configuring firewall...${NC}"
+# ------------------ Firewall (SSH Protected) ------------------
+echo -e "${Y}[5/7] Configuring firewall (SSH port 22 protected)...${NC}"
+
+# CRITICAL: Explicitly allow SSH first
+iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+
+# ZIVPN
 iptables -I INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
 iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
 
+# UDP Custom
 iptables -I INPUT -p udp --dport $UDPC_PORT -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 7800 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p tcp --dport 7800 -j ACCEPT 2>/dev/null || true
 
-# UDPGW port (7300) – local only, no external exposure needed
+# UDPGW (local only)
 iptables -I INPUT -p udp --dport 7300 -s 127.0.0.1 -j ACCEPT 2>/dev/null || true
 
+# Ensure default policies are ACCEPT
+iptables -P INPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -P OUTPUT ACCEPT
+
 netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+
+echo -e "${G}[✓] Firewall configured – SSH (port 22) is open${NC}"
 
 # ------------------ Install Panel ------------------
 echo -e "${Y}[6/7] Installing OP UDP Panel...${NC}"
