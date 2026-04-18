@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Compact Dashboard with Device Binding
+# OP UDP PANEL – Modern UI with Device Binding
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -76,16 +76,17 @@ get_sysinfo() {
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
-# ------------------ Compact Banner ------------------
+# ------------------ Modern OP PANEL Header ------------------
 print_header() {
     clear
     echo -e "${WHT}╔══════════════════════════════════════════════════════════════════════════════╗${RST}"
     echo -e "${WHT}║${RST}                                                                              ${WHT}║${RST}"
-    echo -e "${WHT}║${RST}   ${RED}▀█▀ █░█ █▀▀   ${GRN}█▀█ █▄░█ █▀▀ █▀█ █▀▀ █▀ █▀▀ █░█░█ ▄▀█   ${YLW}█░█ █▀▄ █▀█${RST}   ${WHT}║${RST}"
-    echo -e "${WHT}║${RST}   ${RED}░█░ █▀█ ██▄   ${GRN}█▄█ █░▀█ ██▄ █▀▀ ██▄ ▄█ ██▄ ▀▄▀▄▀ █▀█   ${YLW}█▄█ █▄▀ █▀▀${RST}   ${WHT}║${RST}"
+    echo -e "${WHT}║${RST}                              ${BOLD}${CYN}▀▀█▀▀ █░░█ █▀▀ ░░ ${GRN}█▀█ █▀█ ░░ ${YLW}█▀█ █▀█ █▀▄ █▀▀ █░░${RST}                              ${WHT}║${RST}"
+    echo -e "${WHT}║${RST}                              ${BOLD}${CYN}░░█░░ █▀▀█ █▀▀ ░░ ${GRN}█▄█ █▀▀ ░░ ${YLW}█▀▀ █▀█ █▄▀ █▀▀ █░░${RST}                              ${WHT}║${RST}"
+    echo -e "${WHT}║${RST}                              ${BOLD}${CYN}░░▀░░ ▀░░▀ ▀▀▀ ░░ ${GRN}▀░░ ▀░░ ░░ ${YLW}▀░░ ▀░▀ ▀░▀ ▀▀▀ ▀▀▀${RST}                              ${WHT}║${RST}"
     echo -e "${WHT}║${RST}                                                                              ${WHT}║${RST}"
     echo -e "${WHT}╠══════════════════════════════════════════════════════════════════════════════╣${RST}"
-    echo -e "${WHT}║${RST}                      ${CYN}Professional UDP Tunnel Management${RST}                       ${WHT}║${RST}"
+    echo -e "${WHT}║${RST}                         ${MAG}${BOLD}⚡ PROFESSIONAL UDP TUNNEL MANAGEMENT ⚡${RST}                         ${WHT}║${RST}"
     echo -e "${WHT}╠══════════════════════════════════════════════════════════════════════════════╣${RST}"
 }
 
