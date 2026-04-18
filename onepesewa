@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Final Unified Dashboard (ZIVPN + UDP Custom)
+# OP UDP PANEL – Dynamic UDP Custom Port Detection
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -12,6 +12,13 @@ PORT_END=19999
 UDPC_DIR="/root/udp"
 UDPC_USERS="$UDPC_DIR/users.json"
 ADMIN_TELEGRAM="@OfficialOnePesewa"
+
+# Detect UDP Custom port from saved file or config
+if [ -f "$UDPC_DIR/udp_port.txt" ]; then
+    UDPC_PORT=$(cat "$UDPC_DIR/udp_port.txt")
+else
+    UDPC_PORT=$(grep -oP '"listen":":\K\d+' "$UDPC_DIR/config.json" 2>/dev/null || echo "55000")
+fi
 
 RED='\e[1;31m' GRN='\e[1;32m' YLW='\e[1;33m' BLU='\e[1;34m' MAG='\e[1;35m' CYN='\e[1;36m' WHT='\e[1;37m' RST='\e[0m'
 BOLD='\e[1m' DIM='\e[2m'
@@ -114,7 +121,7 @@ print_info() {
     echo -e "${WHT}│${RST}  ${GRN}📡 ZIVPN       :${RST} $ZIVPN_STATUS  ${CYN}$ZIVPN_USERS users${RST}"
     echo -e "${WHT}│${RST}  ${BLU}🔷 UDP Custom  :${RST} $UDPC_STATUS  ${CYN}$UDPC_USERS users${RST}"
     echo -e "${WHT}│${RST}  ${MAG}🎯 ZIVPN Port  :${RST} 5667 (NAT $PORT_START-$PORT_END)"
-    echo -e "${WHT}│${RST}  ${MAG}📶 UDPC Port   :${RST} 55000 (Gateway 7800)"
+    echo -e "${WHT}│${RST}  ${MAG}📶 UDPC Port   :${RST} $UDPC_PORT (Gateway 7800)"
     echo -e "${WHT}├─────────────────────────────────────────────────────────────────────────────┤${RST}"
 }
 
