@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Compact Dashboard with Device Binding + Fallback Geo
+# OP UDP PANEL – Compact Dashboard with Device Binding
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -22,54 +22,29 @@ command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 command -v speedtest-cli &>/dev/null || apt-get install -y speedtest-cli -qq 2>/dev/null
 
-# ------------------ Robust Geo Fetch (multiple fallbacks) ------------------
+# ------------------ Geo Fetch (ipdata.co) ------------------
 fetch_geo() {
+    local API_KEY="f137ae4e341fc34e13dbdd7d24c3d483b4b4818a0c766749bf3b2608"
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
         return
     fi
     printf "${DIM}Fetching location...${RST}"
-    
-    # Try ipapi.co first
-    GEO=$(curl -4 -s --max-time 5 https://ipapi.co/json/ 2>/dev/null)
-    if [ -n "$GEO" ] && echo "$GEO" | grep -q '"ip"'; then
+    GEO=$(curl -4 -s --max-time 8 "https://api.ipdata.co/?api-key=${API_KEY}" 2>/dev/null)
+    if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
+        IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"; ZIP=""; COUNTRY_CODE=""
+    else
         IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
         CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
         COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
         COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country_code":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
         ZIP=$(echo "$GEO" | grep -oP '"postal":\s*"\K[^"]+')
-        ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
-    else
-        # Fallback 1: ipinfo.io
-        GEO=$(curl -4 -s --max-time 5 https://ipinfo.io/json 2>/dev/null)
-        if [ -n "$GEO" ] && echo "$GEO" | grep -q '"ip"'; then
-            IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
-            CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
-            COUNTRY=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+')
-            COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
-            ZIP=$(echo "$GEO" | grep -oP '"postal":\s*"\K[^"]+')
-            ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
-        else
-            # Fallback 2: ifconfig.co (simpler)
-            GEO=$(curl -4 -s --max-time 5 https://ifconfig.co/json 2>/dev/null)
-            if [ -n "$GEO" ] && echo "$GEO" | grep -q '"ip"'; then
-                IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
-                CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
-                COUNTRY=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+')
-                COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country_code":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
-                ZIP=""
-                ISP=$(echo "$GEO" | grep -oP '"asn_org":\s*"\K[^"]+')
-            fi
-        fi
+        ISP=$(echo "$GEO" | grep -oP '"organisation":\s*"\K[^"]+')
+        [ -z "$IP" ] && IP="N/A"
+        [ -z "$CITY" ] && CITY="Unknown"
+        [ -z "$COUNTRY" ] && COUNTRY="Unknown"
+        [ -z "$ISP" ] && ISP="Unknown"
     fi
-    
-    # Final fallback defaults
-    [ -z "$IP" ] && IP="N/A"
-    [ -z "$CITY" ] && CITY="Unknown"
-    [ -z "$COUNTRY" ] && COUNTRY="Unknown"
-    [ -z "$COUNTRY_CODE" ] && COUNTRY_CODE=""
-    [ -z "$ISP" ] && ISP="Unknown"
-    
     echo "IP=\"$IP\"; CITY=\"$CITY\"; COUNTRY=\"$COUNTRY\"; COUNTRY_CODE=\"$COUNTRY_CODE\"; ZIP=\"$ZIP\"; ISP=\"$ISP\"" > "$CACHE_FILE"
     printf "\r\033[K"
 }
