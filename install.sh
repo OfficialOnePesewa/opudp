@@ -1,17 +1,15 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Final Working Version
-# Builds UDP Custom with Makefile, correct config, no prompts.
+# OFFICIAL ONEPESEWA DUAL PROTOCOL INSTALLER – Self‑Contained
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
 ADMIN_HANDLE="@OfficialOnePesewa"
-DONATION_MSG="💛 Support VPS Hosting - Donations Welcome: Telecel Cash: 0502013764"
 
 [ "$EUID" -ne 0 ] && echo -e "${R}Run as root.${NC}" && exit 1
 
 echo -e "${Y}[+] Updating system & installing dependencies...${NC}"
 apt-get update -qq
-apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip golang-go make
+apt-get install -y -qq curl wget jq iptables-persistent netfilter-persistent openssl vnstat bc python3 python3-pip git unzip
 
 OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
 echo -e "${G}[+] OS: $OS${NC}"
@@ -97,32 +95,24 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# ------------------ Build UDP Custom (Using Makefile) ------------------
-echo -e "${Y}[2/6] Building UDP Custom from source...${NC}"
+# ------------------ Install UDP Custom (from this repo) ------------------
+echo -e "${Y}[2/6] Installing UDP Custom...${NC}"
 mkdir -p /root/udp
 cd /root
 
-rm -rf udp-custom-build
-git clone https://github.com/http-custom/udp-custom udp-custom-build
-cd udp-custom-build
-make clean
-make
-cp udp-custom /root/udp/
+UDPC_URL="https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/bin/udp-custom-linux-amd64"
+wget -qO /root/udp/udp-custom "$UDPC_URL"
 chmod +x /root/udp/udp-custom
-cd /root
-rm -rf udp-custom-build
 
-# Verify binary
-if [ ! -x /root/udp/udp-custom ] || [ ! -s /root/udp/udp-custom ]; then
-    echo -e "${R}[✗] UDP Custom build failed.${NC}"
+if [ ! -s /root/udp/udp-custom ]; then
+    echo -e "${R}[✗] Failed to download UDP Custom binary.${NC}"
     exit 1
 fi
-echo -e "${G}[✓] UDP Custom binary built ($(stat -c%s /root/udp/udp-custom) bytes)${NC}"
+echo -e "${G}[✓] UDP Custom binary ready ($(stat -c%s /root/udp/udp-custom) bytes)${NC}"
 
 UDPC_PORT=$((50000 + RANDOM % 5000))
 echo -e "${G}[*] UDP Custom port: $UDPC_PORT${NC}"
 
-# Correct config for this version (no 'auth' inside)
 cat <<EOF > /root/udp/config.json
 {
   "listen": ":$UDPC_PORT",
@@ -151,8 +141,6 @@ WorkingDirectory=/root/udp
 ExecStart=/root/udp/udp-custom server -c /root/udp/config.json
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -174,15 +162,12 @@ netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 
 
 # ------------------ Panel ------------------
 echo -e "${Y}[4/6] Installing OP UDP Panel...${NC}"
-for i in 1 2 3; do
-    wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa && break
-    sleep 2
-done
+wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
 chmod +x /usr/local/bin/onepesewa
 ln -sf /usr/local/bin/onepesewa /usr/local/bin/udp
 
 # ------------------ Telegram Bot (Optional) ------------------
-echo -e "${Y}[5/6] Setting up Telegram bot (optional)...${NC}"
+echo -e "${Y}[5/6] Setting up Telegram bot...${NC}"
 set +e
 pip3 install --quiet python-telegram-bot==20.3 2>/dev/null || \
 pip3 install --break-system-packages --quiet python-telegram-bot==20.3 2>/dev/null || true
@@ -238,7 +223,7 @@ fi
 if systemctl is-active --quiet udp-custom; then
     echo -e "${G}✅ UDP Custom is running${NC}"
 else
-    echo -e "${R}❌ UDP Custom failed to start. Check: journalctl -u udp-custom --no-pager -n 20${NC}"
+    echo -e "${R}❌ UDP Custom failed to start.${NC}"
 fi
 
 echo -e "${C}====================================================${NC}"
