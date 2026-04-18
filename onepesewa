@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Non‑Blocking Service Control
+# OP UDP PANEL – Final Unified Dashboard with Connection Strings
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -11,26 +11,35 @@ PORT_END=19999
 
 UDPC_DIR="/root/udp"
 UDPC_USERS="$UDPC_DIR/users.json"
-UDPC_CONFIG="$UDPC_DIR/config.json"
+ADMIN_TELEGRAM="@OfficialOnePesewa"
 
 RED='\e[1;31m' GRN='\e[1;32m' YLW='\e[1;33m' BLU='\e[1;34m' MAG='\e[1;35m' CYN='\e[1;36m' WHT='\e[1;37m' RST='\e[0m'
 BOLD='\e[1m' DIM='\e[2m'
 
 command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 
-# ------------------ Geo Fetch ------------------
+# ------------------ Geo Fetch (with multiple fallbacks) ------------------
 fetch_geo() {
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
         return
     fi
-    GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null)
-    if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
+    printf "${DIM}Fetching location...${RST}"
+    GEO=""
+    for api in "https://ipapi.co/json/" "https://ipinfo.io/json" "https://ifconfig.co/json" "https://api.myip.com"; do
+        GEO=$(curl -4 -s --max-time 5 "$api" 2>/dev/null)
+        if [ -n "$GEO" ] && echo "$GEO" | grep -qE '"ip"|"ip"'; then
+            break
+        fi
+    done
+    if [ -z "$GEO" ]; then
         IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"; ZIP=""; COUNTRY_CODE=""
     else
-        IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
-        CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
-        COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
+        IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+' | head -1)
+        [ -z "$IP" ] && IP=$(curl -4 -s ifconfig.me)
+        CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+' | head -1)
+        COUNTRY=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | head -1)
+        [ -z "$COUNTRY" ] && COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
         COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country_code":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
         ZIP=$(echo "$GEO" | grep -oP '"postal":\s*"\K[^"]+')
         ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
@@ -40,6 +49,7 @@ fetch_geo() {
         [ -z "$ISP" ] && ISP="Unknown"
     fi
     echo "IP=\"$IP\"; CITY=\"$CITY\"; COUNTRY=\"$COUNTRY\"; COUNTRY_CODE=\"$COUNTRY_CODE\"; ZIP=\"$ZIP\"; ISP=\"$ISP\"" > "$CACHE_FILE"
+    printf "\r\033[K"
 }
 
 flag() {
@@ -101,6 +111,7 @@ print_info() {
     echo -e "${WHT}│${RST}  ${BLU}🏢 ISP         :${RST} $ISP"
     echo -e "${WHT}│${RST}  ${GRN}💻 OS          :${RST} $OS_FULL"
     echo -e "${WHT}│${RST}  ${YLW}⏱️  Uptime      :${RST} $UPTIME"
+    echo -e "${WHT}│${RST}  ${MAG}📱 Admin TG    :${RST} $ADMIN_TELEGRAM"
     echo -e "${WHT}│${RST}  ${GRN}📡 ZIVPN       :${RST} $ZIVPN_STATUS  ${CYN}$ZIVPN_USERS users${RST}"
     echo -e "${WHT}│${RST}  ${BLU}🔷 UDP Custom  :${RST} $UDPC_STATUS  ${CYN}$UDPC_USERS users${RST}"
     echo -e "${WHT}│${RST}  ${MAG}🎯 ZIVPN Port  :${RST} 5667 (NAT $PORT_START-$PORT_END)"
@@ -115,33 +126,15 @@ print_menu() {
     echo -e "${WHT}│${RST}    ${GRN}3)${RST}  🔄 Restart Services       ${GRN}8)${RST}  🔁  Renew User (ZIVPN)"
     echo -e "${WHT}│${RST}    ${GRN}4)${RST}  ℹ️  Service Status         ${GRN}9)${RST}  🧹  Cleanup Expired"
     echo -e "${WHT}│${RST}    ${GRN}5)${RST}  📋 List All Users        ${GRN}10)${RST}  📊  Usage Stats (ZIVPN)"
-    echo -e "${WHT}│${RST}   ${GRN}11)${RST}  📜 Live Logs             ${GRN}12)${RST}  ♻️  Restore Backup"
-    echo -e "${WHT}│${RST}   ${GRN}13)${RST}  🧪 Trial User            ${GRN}14)${RST}  🤖 Telegram Setup"
-    echo -e "${WHT}│${RST}   ${GRN}15)${RST}  📋 List UDPC Users       ${GRN}16)${RST}  💰 Donate / Support"
-    echo -e "${WHT}│${RST}   ${GRN}18)${RST}  ⬆️  Update Panel"
+    echo -e "${WHT}│${RST}   ${GRN}11)${RST}  📜 Live Logs             ${GRN}12)${RST}  🤖 Telegram Setup"
+    echo -e "${WHT}│${RST}   ${GRN}13)${RST}  🧪 Trial User            ${GRN}14)${RST}  📋 List UDPC Users"
+    echo -e "${WHT}│${RST}   ${GRN}15)${RST}  ⬆️  Update Panel          ${GRN}16)${RST}  💰 Donate / Support"
     echo -e "${WHT}├─────────────────────────────────────────────────────────────────────────────┤${RST}"
     echo -e "${WHT}│${RST}  ${RED}99)${RST}  💣 UNINSTALL                                                         ${WHT}│${RST}"
     echo -e "${WHT}│${RST}   ${GRN}0)${RST}  🚪 Exit                                                               ${WHT}│${RST}"
     echo -e "${WHT}└─────────────────────────────────────────────────────────────────────────────┘${RST}"
     echo -e "${YLW}💛 Support VPS Hosting - Donations Welcome: Telecel Cash: 0502013764${RST}"
     echo ""
-}
-
-# ------------------ Service Control (Non‑Blocking) ------------------
-service_control() {
-    action=$1
-    echo -e "${YLW}Select service:${RST}"
-    echo "  1) ZIVPN only"
-    echo "  2) UDP Custom only"
-    echo "  3) Both"
-    read -p "Choice: " svc
-    case $svc in
-        1) systemctl $action zivpn --no-block & ;;
-        2) systemctl $action udp-custom --no-block & ;;
-        3) systemctl $action zivpn --no-block & systemctl $action udp-custom --no-block & ;;
-        *) echo "Invalid";;
-    esac
-    echo -e "${GRN}Command sent. Check status with option 4.${RST}"
 }
 
 # ------------------ UDP Custom Helpers ------------------
@@ -182,7 +175,24 @@ find_free_port() {
     echo ""
 }
 
-# ------------------ Add User ------------------
+# ------------------ Service Control (Non‑Blocking) ------------------
+service_control() {
+    action=$1
+    echo -e "${YLW}Select service:${RST}"
+    echo "  1) ZIVPN only"
+    echo "  2) UDP Custom only"
+    echo "  3) Both"
+    read -p "Choice: " svc
+    case $svc in
+        1) systemctl $action zivpn --no-block & ;;
+        2) systemctl $action udp-custom --no-block & ;;
+        3) systemctl $action zivpn --no-block & systemctl $action udp-custom --no-block & ;;
+        *) echo "Invalid";;
+    esac
+    echo -e "${GRN}Command sent. Check status with option 4.${RST}"
+}
+
+# ------------------ Add User (with proper connection strings) ------------------
 add_user() {
     echo -e "\n${YLW}Select Protocol:${RST}"
     echo "  1) ZIVPN"
@@ -205,10 +215,18 @@ add_user() {
             echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
             echo -e "${CYN}│  ${GRN}🎉 ZIVPN USER CREATED 🎉${RST}${CYN}                            │${RST}"
             echo -e "${CYN}│${RST} ${YLW}🔑 Password :${RST} ${WHT}$finalpass${RST}"
-            echo -e "${CYN}│${RST} ${YLW}📋 Connection:${RST} ${WHT}zivpn://$finalpass@$IP:5667/${RST}"
-            echo -e "${CYN}│${RST} ${YLW}📡 Port     :${RST} ${WHT}$port${RST}  ${YLW}⏳ Expiry:${RST} ${WHT}$exp${RST}"
-            echo -e "${CYN}│${RST} ${MAG}🌍 Server IP :${RST} ${WHT}$IP${RST}"
-            echo -e "${CYN}│${RST} ${YLW}💛 Support: Telecel Cash 0502013764${RST}               ${CYN}│${RST}"
+            echo -e "${CYN}│${RST} ${YLW}📋 Connection:${RST}"
+            echo -e "${CYN}│${RST}    ${WHT}Server IP: $IP${RST}"
+            echo -e "${CYN}│${RST}    ${WHT}Port: 5667${RST}"
+            echo -e "${CYN}│${RST}    ${WHT}Password: $finalpass${RST}"
+            echo -e "${CYN}│${RST} ${YLW}⏳ Expiry   :${RST} ${WHT}$exp ($days days)${RST}"
+            echo -e "${CYN}│${RST} ${YLW}📊 Quota    :${RST} ${WHT}$quota${RST}"
+            echo -e "${CYN}│${RST} ${YLW}📱 Device ID:${RST} ${WHT}${devid:-None}${RST}"
+            echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
+            echo -e "${CYN}│${RST} ${MAG}🌍 Server   :${RST} ${WHT}$CITY, $COUNTRY${RST}"
+            echo -e "${CYN}│${RST} ${MAG}🏢 ISP      :${RST} ${WHT}$ISP${RST}"
+            echo -e "${CYN}│${RST} ${MAG}📱 Admin TG :${RST} ${WHT}$ADMIN_TELEGRAM${RST}"
+            echo -e "${CYN}│${RST} ${YLW}💛 Support  : Telecel Cash 0502013764${RST}               ${CYN}│${RST}"
             echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}\n"
             read -p "Press Enter to continue..."
             ;;
@@ -224,11 +242,14 @@ add_user() {
             echo -e "${CYN}│  ${GRN}🎉 UDP CUSTOM USER CREATED 🎉${RST}${CYN}                       │${RST}"
             echo -e "${CYN}│${RST} ${YLW}👤 Username :${RST} ${WHT}$username${RST}"
             echo -e "${CYN}│${RST} ${YLW}🔑 Password :${RST} ${WHT}$password${RST}"
-            echo -e "${CYN}│${RST} ${YLW}📋 Connection:${RST} ${WHT}udp://$username:$password@$IP:36712/${RST}"
-            echo -e "${CYN}│${RST} ${YLW}📡 Port     :${RST} ${WHT}36712${RST}  ${YLW}Gateway:${RST} ${WHT}7800${RST}"
-            echo -e "${CYN}│${RST} ${YLW}⏳ Expiry   :${RST} ${WHT}$expiry${RST}"
-            echo -e "${CYN}│${RST} ${MAG}🌍 Server IP :${RST} ${WHT}$IP${RST}"
-            echo -e "${CYN}│${RST} ${YLW}💛 Support: Telecel Cash 0502013764${RST}               ${CYN}│${RST}"
+            echo -e "${CYN}│${RST} ${YLW}📋 Connection String (copy exactly):${RST}"
+            echo -e "${CYN}│${RST}    ${WHT}$IP:36712@$username:$password${RST}"
+            echo -e "${CYN}│${RST} ${YLW}⏳ Expiry   :${RST} ${WHT}$expiry ($days days)${RST}"
+            echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
+            echo -e "${CYN}│${RST} ${MAG}🌍 Server   :${RST} ${WHT}$CITY, $COUNTRY${RST}"
+            echo -e "${CYN}│${RST} ${MAG}🏢 ISP      :${RST} ${WHT}$ISP${RST}"
+            echo -e "${CYN}│${RST} ${MAG}📱 Admin TG :${RST} ${WHT}$ADMIN_TELEGRAM${RST}"
+            echo -e "${CYN}│${RST} ${YLW}💛 Support  : Telecel Cash 0502013764${RST}               ${CYN}│${RST}"
             echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}\n"
             read -p "Press Enter to continue..."
             ;;
@@ -320,16 +341,15 @@ while true; do
         9) /usr/local/bin/onepesewa --bot-cleanup; read -p "Press Enter..." ;;
         10) echo "ZIVPN Usage:"; cat "$USAGE_DB"; read -p "Press Enter..." ;;
         11) journalctl -u zivpn -u udp-custom -f ;;
-        12) echo "Restore function coming soon."; read -p "Press Enter..." ;;
-        13) read -p "Minutes: " m; pass="trial_$(openssl rand -hex 2)"
-            /usr/local/bin/onepesewa --bot-adduser "$pass" 1 "100MB" "trial"
-            echo "ZIVPN Trial: $pass"; (sleep $((m*60)); /usr/local/bin/onepesewa --bot-removeuser "$pass") & read -p "Press Enter..." ;;
-        14) read -p "Bot Token: " t; echo "$t" > /etc/zivpn/telegram_token
+        12) read -p "Bot Token: " t; echo "$t" > /etc/zivpn/telegram_token
             systemctl enable opudp-bot 2>/dev/null; systemctl restart opudp-bot --no-block 2>/dev/null &
             echo "Bot configured."; read -p "Press Enter..." ;;
-        15) udpc_list_users; read -p "Press Enter..." ;;
+        13) read -p "Minutes: " m; pass="trial_$(openssl rand -hex 2)"
+            /usr/local/bin/onepesewa --bot-adduser "$pass" 1 "100MB" "trial"
+            echo "ZIVPN Trial: $pass (expires in $m minutes)"; read -p "Press Enter..." ;;
+        14) udpc_list_users; read -p "Press Enter..." ;;
+        15) wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa && chmod +x /usr/local/bin/onepesewa && echo "Updated! Restarting..."; sleep 2; exec onepesewa ;;
         16) clear; echo -e "${CYN}💛 Telecel Cash: 0502013764${RST}"; read -p "Press Enter..." ;;
-        18) wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa && chmod +x /usr/local/bin/onepesewa && echo "Updated!"; sleep 2; exec onepesewa ;;
         99) systemctl stop zivpn udp-custom; rm -rf /etc/zivpn /usr/local/bin/zivpn /usr/local/bin/onepesewa /root/udp; echo "Uninstalled."; exit ;;
         0) clear; echo "Goodbye!"; exit ;;
         *) echo -e "${RED}Invalid.${RST}"; read -p "Press Enter..." ;;
