@@ -1,5 +1,5 @@
 #!/bin/bash
-# OP UDP PANEL – Redesigned Vertical Dashboard with Device Binding & Optimizer
+# OP UDP PANEL – Redesigned Vertical Dashboard with Device Binding
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -13,13 +13,16 @@ PORT_START=6001
 PORT_END=19999
 DAEMON_PID_FILE="/var/run/opudp_daemon.pid"
 
+# Colors
 RED='\e[1;31m' GRN='\e[1;32m' YLW='\e[1;33m' BLU='\e[1;34m' MAG='\e[1;35m' CYN='\e[1;36m' WHT='\e[1;37m' RST='\e[0m'
 BOLD='\e[1m' DIM='\e[2m'
 
+# Dependencies
 command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 command -v speedtest-cli &>/dev/null || apt-get install -y speedtest-cli -qq 2>/dev/null
 
+# ------------------ Geo Fetch (ipapi.co) ------------------
 fetch_geo() {
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
@@ -73,6 +76,7 @@ get_sysinfo() {
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
+# ------------------ Beautiful Dashboard ------------------
 print_header() {
     clear
     echo -e "${WHT}┌─────────────────────────────────────────────────────────────────────────────┐${RST}"
@@ -123,7 +127,6 @@ print_menu() {
     echo -e "${WHT}│${RST}                                                                             ${WHT}│${RST}"
     echo -e "${WHT}│${RST}   ${GRN}21)${RST}  👤 User Information       ${GRN}22)${RST}  🤖 Telegram Setup                ${WHT}│${RST}"
     echo -e "${WHT}│${RST}   ${GRN}23)${RST}  👑 Add Admin              ${GRN}24)${RST}  📄 List Admins                   ${WHT}│${RST}"
-    echo -e "${WHT}│${RST}   ${GRN}25)${RST}  ⚙️  Re‑run VPS Optimizer                                     ${WHT}│${RST}"
     echo -e "${WHT}│${RST}                                                                             ${WHT}│${RST}"
     echo -e "${WHT}├─────────────────────────────────────────────────────────────────────────────┤${RST}"
     echo -e "${WHT}│${RST}                                                                             ${WHT}│${RST}"
@@ -134,6 +137,7 @@ print_menu() {
     echo ""
 }
 
+# ------------------ Helper Functions ------------------
 find_free_port() {
     local port=$PORT_START
     while [ $port -le $PORT_END ]; do
@@ -177,8 +181,10 @@ remove_tracking() {
     iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
 }
 
+# ------------------ User Management with Device Binding ------------------
 add_user_core() {
     local basepass="$1" days="$2" quota="$3" devid="$4"
+    # Device binding: if devid provided, final password is basepass_devid
     if [ -n "$devid" ] && [ "$devid" != "None" ]; then
         finalpass="${basepass}_${devid}"
     else
@@ -189,6 +195,7 @@ add_user_core() {
     startdate=$(date +%Y-%m-%d)
     port=$(find_free_port)
     [ -z "$port" ] && { echo "ERROR: No free ports"; return 1; }
+    # Add to ZIVPN config
     jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
     echo "$finalpass|$exp|$quota|$port|$devid|$startdate" >> "$DB"
     echo "$finalpass|0" >> "$USAGE_DB"
@@ -197,6 +204,7 @@ add_user_core() {
     echo "SUCCESS|$finalpass|$exp|$port|$quota"
 }
 
+# ------------------ Bot CLI Mode ------------------
 if [[ "$1" == "--bot-"* ]]; then
     cmd="${1#--bot-}"
     shift
@@ -216,6 +224,7 @@ if [[ "$1" == "--bot-"* ]]; then
     exit 0
 fi
 
+# ------------------ Usage Daemon ------------------
 update_usage_db() {
     while IFS='|' read -r pass expiry quota port dev start; do
         [ -z "$port" ] || [ "$port" = "None" ] && continue
@@ -224,6 +233,7 @@ update_usage_db() {
         total=$(( ${in_bytes:-0} + ${out_bytes:-0} ))
         grep -v "^$pass|" "$USAGE_DB" > /tmp/usage_tmp
         echo "$pass|$total" >> /tmp/usage_tmp; mv /tmp/usage_tmp "$USAGE_DB"
+        # Quota enforcement
         quota_bytes=$(quota_to_bytes "$quota")
         if [ $quota_bytes -gt 0 ] && [ $total -ge $quota_bytes ] && ! grep -q "^$pass|.*PAUSED" "$DB"; then
             sed -i "s|^$pass|$pass [PAUSED]|" "$DB"
@@ -241,6 +251,7 @@ start_usage_daemon() {
 
 if [ "$1" = "--update-usage" ]; then update_usage_db; exit 0; fi
 
+# ------------------ Interactive Menu Functions ------------------
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
     read -p "$(echo -e "${GRN}Base Password  : ${RST}")" basepass
@@ -265,6 +276,10 @@ add_user() {
         echo -e "${CYN}│${RST} ${MAG}🌍 Server IP    :${RST} ${WHT}$IP${RST}"
         echo -e "${CYN}│${RST} ${MAG}📍 Location     :${RST} ${WHT}$CITY, $COUNTRY${RST}"
         echo -e "${CYN}│${RST} ${MAG}🏢 ISP          :${RST} ${WHT}$ISP${RST}"
+        echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
+        echo -e "${CYN}│${RST} ${YLW}💝 Support VPS Hosting${RST}                             ${CYN}│${RST}"
+        echo -e "${CYN}│${RST} ${WHT}   Donate via Telecel Cash: 0502013764${RST}            ${CYN}│${RST}"
+        echo -e "${CYN}│${RST} ${DIM}   Any amount accepted – Thank you! 🙏${RST}              ${CYN}│${RST}"
         echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}\n"
     else
         echo -e "${RED}$result${RST}"
@@ -272,6 +287,7 @@ add_user() {
     read -p "Press Enter to continue..."
 }
 
+# ------------------ Main Loop ------------------
 fetch_geo
 start_usage_daemon
 
@@ -299,7 +315,6 @@ while true; do
         22) read -p "Bot Token: " t; echo "$t" > /etc/zivpn/telegram_token; systemctl enable opudp-bot 2>/dev/null; systemctl restart opudp-bot 2>/dev/null; echo "Bot configured."; read -p "Press Enter..." ;;
         23) read -p "Chat ID: " id; read -p "Name: " n; echo "$id|admin|$n" >> "$ADMINS_DB"; echo "Admin added."; read -p "Press Enter..." ;;
         24) cat "$ADMINS_DB"; read -p "Press Enter..." ;;
-        25) echo -e "${Y}Running VPS Optimizer again...${NC}"; bash <(curl -s https://raw.githubusercontent.com/opiran-club/VPS-Optimizer/main/optimizer.sh --ipv4); read -p "Press Enter..." ;;
         99) systemctl stop zivpn; rm -rf /etc/zivpn /usr/local/bin/zivpn /usr/local/bin/onepesewa; echo "Uninstalled."; exit ;;
         0) clear; echo "Goodbye!"; exit ;;
         *) echo -e "${RED}Invalid option.${RST}"; read -p "Press Enter..." ;;
