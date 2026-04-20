@@ -15,4 +15,4 @@
 Run this on a **fresh Ubuntu 20.04/22.04/24.04 or Debian 11/12 VPS** as root:
 
 ```bash
-wget -O zi.sh https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh; sudo chmod +x zi.sh; sudo ./zi.sh
+wget -O install.sh https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh; sudo chmod +x install.sh; sudo ./install.sh
