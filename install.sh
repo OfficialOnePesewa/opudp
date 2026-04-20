@@ -1,198 +1,250 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA UDP Installer – Debian/Ubuntu with VoIP Support
-set -e
+# OP UDP PANEL – Professional 3D Dashboard with Device ID Embedding
+
+CONFIG="/etc/zivpn/config.json"
+DB="/etc/zivpn/users.db"
+CACHE_FILE="/tmp/opudp_geo.cache"
+CACHE_TTL=300
 
 # Colors
-G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' NC='\e[0m'
+RED='\e[1;31m' GRN='\e[1;32m' YLW='\e[1;33m' BLU='\e[1;34m' MAG='\e[1;35m' CYN='\e[1;36m' WHT='\e[1;37m' RST='\e[0m'
+BOLD='\e[1m' DIM='\e[2m'
 
-# Root check
-[ "$EUID" -ne 0 ] && echo -e "${R}Run as root.${NC}" && exit 1
+# Dependencies (silent)
+command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
+command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 
-# Install essentials
-echo -e "${Y}[+] Updating & installing curl/wget...${NC}"
-apt-get update -qq
-apt-get install -y -qq curl wget
+# --- Fetch Geo with fallback APIs ---
+fetch_geo() {
+    if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
+        source "$CACHE_FILE"
+        return
+    fi
 
-# OS info
-OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
-echo -e "${G}[+] OS: $OS${NC}"
+    printf "${DIM}Fetching location...${RST}"
+    GEO=""
+    for api in "https://ipapi.co/json/" "https://ipinfo.io/json" "https://ifconfig.co/json"; do
+        GEO=$(curl -4 -s --max-time 5 "$api" 2>/dev/null)
+        if [ -n "$GEO" ] && echo "$GEO" | grep -q '"ip"'; then
+            break
+        fi
+    done
 
-# Geo IP (ipapi.co with fallback)
-echo -e "${Y}[+] Fetching server info...${NC}"
-GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null)
-if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
-    IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"
-else
-    IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
-    CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
-    COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
-    ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
-    [ -z "$IP" ] && IP="N/A"
-    [ -z "$CITY" ] && CITY="Unknown"
-    [ -z "$COUNTRY" ] && COUNTRY="Unknown"
-    [ -z "$ISP" ] && ISP="Unknown"
-fi
-LOC="$CITY, $COUNTRY"
+    if [ -z "$GEO" ]; then
+        IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"; ZIP=""; COUNTRY_CODE=""
+    else
+        IP=$(echo "$GEO" | grep -oP '"ip":\s*"\K[^"]+')
+        CITY=$(echo "$GEO" | grep -oP '"city":\s*"\K[^"]+')
+        COUNTRY=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | head -1)
+        [ -z "$COUNTRY" ] && COUNTRY=$(echo "$GEO" | grep -oP '"country_name":\s*"\K[^"]+')
+        COUNTRY_CODE=$(echo "$GEO" | grep -oP '"country":\s*"\K[^"]+' | tr '[:upper:]' '[:lower:]')
+        ZIP=$(echo "$GEO" | grep -oP '"postal":\s*"\K[^"]+')
+        ISP=$(echo "$GEO" | grep -oP '"org":\s*"\K[^"]+')
+        [ -z "$IP" ] && IP="N/A"
+        [ -z "$CITY" ] && CITY="Unknown"
+        [ -z "$COUNTRY" ] && COUNTRY="Unknown"
+        [ -z "$ISP" ] && ISP="Unknown"
+    fi
 
-# Banner
-clear
-echo -e "${G}"
-echo "   ___  _   _ ______ _____  ______ ______ _    _ ______          _    _ ______ _____  "
-echo "  / _ \| \ | |  ____|  __ \|  ____|  ____| |  | |  ____|   /\   | |  | |  __ \|  __ \ "
-echo " | | | |  \| | |__  | |__) | |__  | |__  | |  | | |__     /  \  | |  | | |__) | |__) |"
-echo " | | | |     |  __| |  ___/|  __| |  __| | |  | |  __|   / /\ \ | |  | |  ___/|  ___/ "
-echo " | |_| | |\  | |____| |    | |____| |____| |__| | |____ / ____ \| |__| | |    | |     "
-echo "  \___/|_| \_|______|_|    |______|______|\____/|______/_/    \_\\____/|_|    |_|     "
-echo -e "${NC}"
-echo "---------------------------------------------------"
-echo "  OS       : $OS"
-echo "  Location : $LOC"
-echo "  IP       : $IP"
-echo "  ISP      : $ISP"
-echo "  Admin    : @OfficialOnePesewa"
-echo "---------------------------------------------------"
-
-# Dependencies
-echo -e "${Y}[1/6] Installing dependencies...${NC}"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq iptables-persistent netfilter-persistent openssl vnstat bc
-
-# Architecture
-echo -e "${Y}[2/6] Detecting architecture...${NC}"
-ARCH=$(uname -m)
-case $ARCH in
-    x86_64|amd64) BIN="amd64" ;;
-    aarch64|arm64) BIN="arm64" ;;
-    *) echo -e "${R}Unsupported: $ARCH${NC}"; exit 1 ;;
-esac
-echo -e "${G}   Architecture: $ARCH -> $BIN${NC}"
-
-# Stop & remove old binary (fixes "Text file busy")
-echo -e "${Y}[*] Stopping old ZIVPN service & removing binary...${NC}"
-systemctl stop zivpn 2>/dev/null || true
-rm -f /usr/local/bin/zivpn
-
-# Download ZIVPN binary
-echo -e "${Y}[3/6] Downloading ZIVPN binary...${NC}"
-wget -q --show-progress -O /usr/local/bin/zivpn \
-    "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-$BIN" || {
-    echo -e "${R}Failed to download binary.${NC}"; exit 1
+    echo "IP=\"$IP\"; CITY=\"$CITY\"; COUNTRY=\"$COUNTRY\"; COUNTRY_CODE=\"$COUNTRY_CODE\"; ZIP=\"$ZIP\"; ISP=\"$ISP\"" > "$CACHE_FILE"
+    printf "\r\033[K"
 }
-chmod +x /usr/local/bin/zivpn
 
-# Config & DB
-echo -e "${Y}[4/6] Setting up config...${NC}"
-mkdir -p /etc/zivpn
-cat <<EOF > /etc/zivpn/config.json
-{
-  "listen": ":5667",
-  "cert": "/etc/zivpn/zivpn.crt",
-  "key": "/etc/zivpn/zivpn.key",
-  "obfs": "onepesewa",
-  "auth": {
-    "mode": "passwords",
-    "config": []
-  }
+# Flag emoji
+flag() {
+    case $1 in
+        us) echo "🇺🇸" ;; gb) echo "🇬🇧" ;; ca) echo "🇨🇦" ;; au) echo "🇦🇺" ;;
+        de) echo "🇩🇪" ;; fr) echo "🇫🇷" ;; nl) echo "🇳🇱" ;; in) echo "🇮🇳" ;;
+        jp) echo "🇯🇵" ;; br) echo "🇧🇷" ;; za) echo "🇿🇦" ;; sg) echo "🇸🇬" ;;
+        gh) echo "🇬🇭" ;; ng) echo "🇳🇬" ;; ke) echo "🇰🇪" ;; il) echo "🇮🇱" ;;
+        *) echo "" ;;
+    esac
 }
-EOF
-touch /etc/zivpn/users.db
 
-# SSL cert
-echo -e "${Y}[5/6] Generating SSL certificate...${NC}"
-openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
-    -subj "/C=GH/ST=Accra/L=Accra/O=OnePesewa/CN=onepesewa" \
-    -keyout "/etc/zivpn/zivpn.key" -out "/etc/zivpn/zivpn.crt" 2>/dev/null
+# System info (cached per refresh)
+get_sysinfo() {
+    OS_INFO=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+    UPTIME=$(uptime -p | sed 's/up //; s/ days/d/; s/ day/d/; s/ hours/h/; s/ hour/h/; s/ minutes/m/; s/ minute/m/')
+    [ -z "$UPTIME" ] && UPTIME="N/A"
 
-# Firewall & NAT (VoIP optimized)
-echo -e "${Y}[6/6] Configuring firewall (VoIP ready)...${NC}"
-# Disable UFW if present
-command -v ufw &>/dev/null && ufw disable &>/dev/null
+    if systemctl is-active --quiet zivpn; then
+        STATUS="${GRN}🟢 active${RST}"
+    else
+        STATUS="${RED}🔴 inactive${RST}"
+    fi
 
-# Allow SSH
-iptables -I INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
-
-# Allow ZIVPN main port
-iptables -I INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || true
-
-# Allow SIP signalling (VoIP)
-iptables -I INPUT -p udp --dport 5060 -j ACCEPT 2>/dev/null || true
-
-# Allow RTP media ports (VoIP) and user UDP range
-iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
-
-# NAT forwarding for user UDP range
-iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
-
-# Persist rules
-if command -v netfilter-persistent &>/dev/null; then
-    netfilter-persistent save
-elif command -v iptables-save &>/dev/null; then
-    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-fi
-
-# Systemd service
-cat <<EOF > /etc/systemd/system/zivpn.service
-[Unit]
-Description=ZIVPN UDP Server
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable zivpn
-systemctl start zivpn
-
-# Install panel
-echo -e "${Y}[+] Installing onepesewa panel...${NC}"
-wget -qO /usr/local/bin/onepesewa \
-    https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa || {
-    echo -e "${R}Failed to download panel.${NC}"; exit 1
+    USER_COUNT=$(jq '.auth.config | length' "$CONFIG" 2>/dev/null || echo "0")
+    DATE_TIME=$(date +"%a %d %b %Y  %I:%M:%S %p %Z")
+    FLAG=$(flag "$COUNTRY_CODE")
+    [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
-chmod +x /usr/local/bin/onepesewa
 
-# Final summary
-echo -e "\n${C}====================================================${NC}"
-echo -e "${G}         INSTALLATION COMPLETE!${NC}"
-echo -e "${C}====================================================${NC}"
-echo -e "${G} Server IP  :${NC} $IP"
-echo -e "${G} Location   :${NC} $LOC"
-echo -e "${G} ISP        :${NC} $ISP"
-echo -e "${G} ZIVPN Port :${NC} 5667 (UDP)"
-echo -e "${G} NAT Range  :${NC} 6000 - 19999 (inc. VoIP RTP)"
-echo -e "${G} VoIP SIP   :${NC} 5060 (UDP)"
-echo -e "${C}====================================================${NC}"
-echo -e "${Y} Type 'onepesewa' to open the panel.${NC}"
-echo -e "${C}====================================================${NC}"
+# --- 3D ASCII Header "OP UDP PANEL" ---
+print_header() {
+    clear
+    echo -e "${WHT}${BOLD}"
+    echo "   ██████╗ ██████╗     ██╗   ██╗██████╗ ██████╗     ██████╗  █████╗ ███╗   ██╗███████╗██╗     "
+    echo "  ██╔═══██╗██╔══██╗    ██║   ██║██╔══██╗██╔══██╗    ██╔══██╗██╔══██╗████╗  ██║██╔════╝██║     "
+    echo "  ██║   ██║██████╔╝    ██║   ██║██║  ██║██████╔╝    ██████╔╝███████║██╔██╗ ██║█████╗  ██║     "
+    echo "  ██║   ██║██╔═══╝     ██║   ██║██║  ██║██╔═══╝     ██╔═══╝ ██╔══██║██║╚██╗██║██╔══╝  ██║     "
+    echo "  ╚██████╔╝██║         ╚██████╔╝██████╔╝██║         ██║     ██║  ██║██║ ╚████║███████╗███████╗"
+    echo "   ╚═════╝ ╚═╝          ╚═════╝ ╚═════╝ ╚═╝         ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝"
+    echo -e "${RST}"
+    echo -e "${CYN}                        Professional UDP Tunnel Management${RST}"
+    echo ""
+}
 
-# ---- OPTIONAL INSTALLATIONS (BBR + BadVPN) ----
-echo ""
-echo -e "${Y}Do you want to install BBR + TCP Optimizer? (y/n)${NC}"
-read -r answer_bbr
-if [[ "$answer_bbr" =~ ^[Yy]$ ]]; then
-    echo -e "${Y}[+] Installing BBR + TCP Optimizer from opiran-club...${NC}"
+# --- Banner Info Box ---
+banner() {
+    get_sysinfo
+    print_header
+    echo -e "${WHT}╭─────────────────────────────────────────────────────────────╮${RST}"
+    echo -e "${WHT}│${RST}  ${BOLD}🕐  $DATE_TIME${RST}                                   ${WHT}│${RST}"
+    echo -e "${WHT}├─────────────────────────────────────────────────────────────┤${RST}"
+    echo -e "${WHT}│${RST}  ${CYN}🌐 IP       :${RST} $IP"
+    echo -e "${WHT}│${RST}  ${YLW}📍 Location :${RST} $LOC_STR"
+    [ -n "$ZIP" ] && echo -e "${WHT}│${RST}  ${MAG}📮 ZIP      :${RST} $ZIP"
+    echo -e "${WHT}│${RST}  ${BLU}🏢 ISP      :${RST} $ISP"
+    echo -e "${WHT}│${RST}  ${GRN}🎯 UDP Ports:${RST} 6000:19999"
+    echo -e "${WHT}│${RST}  ${WHT}─────────────────────────────────────────────${RST}"
+    echo -e "${WHT}│${RST}  ${GRN}⚡ Service  :${RST} $STATUS"
+    echo -e "${WHT}│${RST}  ${YLW}⏱  Uptime  :${RST} $UPTIME"
+    echo -e "${WHT}│${RST}  ${CYN}👥 Users    :${RST} $USER_COUNT active"
+    echo -e "${WHT}╰─────────────────────────────────────────────────────────────╯${RST}"
+    echo ""
+}
+
+# --- Professional Menu (aligned columns) ---
+show_menu() {
+    printf "${WHT}┌──────────────────────────────────────────────────────────────────────┐${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}1)${RST} Start      ${GRN}2)${RST} Stop       ${GRN}3)${RST} Restart    ${GRN}4)${RST} Status       ${GRN}5)${RST} List        ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}6)${RST} Add User   ${GRN}7)${RST} Remove     ${GRN}8)${RST} Renew      ${GRN}9)${RST} Cleanup      ${GRN}10)${RST} Conn Stats  ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}11)${RST} BW+Expiry ${GRN}12)${RST} Reset BW   ${GRN}13)${RST} Speed Test ${GRN}14)${RST} Live Logs    ${GRN}15)${RST} Backup      ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}16)${RST} Restore   ${GRN}17)${RST} Port Range ${GRN}18)${RST} ${YLW}Update${RST}     ${GRN}19)${RST} Conn Limit   ${GRN}20)${RST} Trial User  ${WHT}│${RST}\n"
+    printf "${WHT}│${RST}  ${GRN}21)${RST} 🚀 BBR Opt  ${GRN}22)${RST} 📡 BadVPN   ${WHT}                                           │${RST}\n"
+    printf "${WHT}├──────────────────────────────────────────────────────────────────────┤${RST}\n"
+    printf "${WHT}│${RST}  ${RED}99) UNINSTALL${RST}                                                ${GRN}0) Exit${RST}  ${WHT}│${RST}\n"
+    printf "${WHT}└──────────────────────────────────────────────────────────────────────┘${RST}\n"
+    echo ""
+}
+
+# --- Add User with Device ID embedded into password ---
+add_user() {
+    echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
+    echo -ne "${GRN}│ Base Password  : ${RST}"; read basepass
+    echo -ne "${GRN}│ Validity (Days): ${RST}"; read days
+    echo -ne "${GRN}│ Quota (GB/MB)  : ${RST}"; read quota
+    echo -ne "${GRN}│ Device ID      : ${RST}"; read devid
+    echo -e "${YLW}╰──────────────────────────────────────────────────────╯${RST}"
+
+    finalpass="${basepass}_${devid}"
+    exp=$(date -d "+$days days" +%Y-%m-%d 2>/dev/null || echo "Invalid date")
+
+    if [ -f "$CONFIG" ]; then
+        jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+    fi
+    echo "$finalpass|$exp|$quota|${devid:-None}" >> "$DB"
+    systemctl restart zivpn 2>/dev/null
+
+    get_sysinfo
+
+    echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
+    echo -e "${CYN}│  ${GRN}${BOLD}🎉 NEW USER CREATED SUCCESSFULLY 🎉${RST}${CYN}                 │${RST}"
+    echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
+    echo -e "${CYN}│${RST} ${YLW}🔑 UDP Password (copy exactly):${RST}"
+    echo -e "${CYN}│${RST}    ${WHT}${BOLD}$finalpass${RST}"
+    echo -e "${CYN}│${RST} ${DIM}(Paste this full string into the ZIVPN app)${RST}"
+    echo -e "${CYN}│${RST}"
+    echo -e "${CYN}│${RST} ${YLW}⏳ Expiry     :${RST} ${WHT}$exp ($days Days)${RST}"
+    echo -e "${CYN}│${RST} ${YLW}📊 Quota      :${RST} ${WHT}$quota${RST}"
+    echo -e "${CYN}│${RST} ${YLW}📱 Device ID  :${RST} ${WHT}$devid${RST}"
+    echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
+    echo -e "${CYN}│${RST} ${MAG}🌍 Server IP  :${RST} ${WHT}$IP${RST}"
+    echo -e "${CYN}│${RST} ${MAG}📍 Location   :${RST} ${WHT}$CITY, $COUNTRY${RST}"
+    echo -e "${CYN}│${RST} ${MAG}🏢 ISP        :${RST} ${WHT}$ISP${RST}"
+    echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}"
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# Trial user
+trial_user() {
+    echo -ne "${GRN}Minutes (1-60): ${RST}"; read mins
+    pass="trial_$(openssl rand -hex 2)"
+    if [ -f "$CONFIG" ]; then
+        jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+        systemctl restart zivpn 2>/dev/null
+    fi
+    echo -e "${GRN}Trial Created: ${YLW}$pass${GRN} (Expires in $mins mins)${RST}"
+    ( sleep $((mins*60))
+      if [ -f "$CONFIG" ]; then
+          jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+          systemctl restart zivpn 2>/dev/null
+      fi
+    ) &
+    read -p "Press Enter to continue..."
+}
+
+# --- BBR Optimization (opiran-club) ---
+install_bbr() {
+    echo -e "\n${YLW}[+] Installing BBR + TCP Optimizer from opiran-club...${RST}"
     apt install curl -y
     bash <(curl -s https://raw.githubusercontent.com/opiran-club/VPS-Optimizer/main/optimizer.sh --ipv4)
-    echo -e "${G}BBR Optimization completed.${NC}"
-else
-    echo -e "${C}Skipped BBR installation.${NC}"
-fi
+    echo -e "${GRN}BBR Optimization completed. System may reboot later.${RST}"
+    read -p "Press Enter to continue..."
+}
 
-echo ""
-echo -e "${Y}Do you want to install BadVPN (UDP Gateway)? (y/n)${NC}"
-read -r answer_badvpn
-if [[ "$answer_badvpn" =~ ^[Yy]$ ]]; then
-    echo -e "${Y}[+] Installing BadVPN UDP Gateway...${NC}"
+# --- BadVPN (UDP Gateway) ---
+install_badvpn() {
+    echo -e "\n${YLW}[+] Installing BadVPN UDP Gateway...${RST}"
     wget -N https://raw.githubusercontent.com/opiran-club/VPS-Optimizer/main/Install/udpgw.sh && bash udpgw.sh
-    echo -e "${G}BadVPN installation finished. Check service: systemctl status udpgw${NC}"
-else
-    echo -e "${C}Skipped BadVPN installation.${NC}"
-fi
+    echo -e "${GRN}BadVPN installation finished. Check service: systemctl status udpgw${RST}"
+    read -p "Press Enter to continue..."
+}
 
-echo ""
-echo -e "${G}All done! Type 'onepesewa' to manage your users.${NC}"
+# Goodbye (updated channel link)
+goodbye() {
+    clear
+    echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
+    echo -e "${CYN}│                                                      │${RST}"
+    echo -e "${CYN}│      ${GRN}Thank you for using${RST}${CYN}                            │${RST}"
+    echo -e "${CYN}│      ${YLW}OP UDP PANEL${RST}${CYN}                                 │${RST}"
+    echo -e "${CYN}│      ${MAG}See you again soon! 👋${RST}${CYN}                         │${RST}"
+    echo -e "${CYN}│                                                      │${RST}"
+    echo -e "${CYN}╰──────────────────────────────────────────────────────╯${RST}"
+    echo -e "\n${WHT}Admin   : ${CYN}@OfficialOnePesewa${RST}"
+    echo -e "${WHT}Channel : ${CYN}https://t.me/officialonepesewatech${RST}\n"
+}
+
+# --- Main Loop ---
+fetch_geo
+while true; do
+    banner
+    show_menu
+    echo -ne "${CYN}Choose [0-99]: ${RST}"; read opt
+    case $opt in
+        1) systemctl start zivpn && echo -e "${GRN}Started.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
+        2) systemctl stop zivpn && echo -e "${RED}Stopped.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
+        3) systemctl restart zivpn && echo -e "${GRN}Restarted.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
+        4) systemctl status zivpn; read -p "Press Enter..." ;;
+        5) [ -f "$DB" ] && { echo -e "\n${CYN}Pass | Expiry | Quota | DeviceID${RST}"; column -t -s "|" "$DB"; } || echo -e "${RED}No users.${RST}"; read -p "Press Enter..." ;;
+        6) add_user ;;
+        7) echo -ne "${GRN}Password to remove: ${RST}"; read pass
+           [ -f "$CONFIG" ] && jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+           [ -f "$DB" ] && sed -i "/^$pass|/d" "$DB"
+           systemctl restart zivpn 2>/dev/null
+           echo -e "${GRN}User removed.${RST}"; read -p "Press Enter..." ;;
+        8|9|10|11|12|13|15|16|17|19) echo "Coming soon."; read -p "Press Enter..." ;;
+        14) journalctl -u zivpn -f ;;
+        18) echo -e "\n${YLW}Updating panel...${RST}"
+             wget -qO /usr/local/bin/onepesewa https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa
+             chmod +x /usr/local/bin/onepesewa
+             echo -e "${GRN}Update complete! Restarting...${RST}"; sleep 2; exec onepesewa ;;
+        20) trial_user ;;
+        21) install_bbr ;;
+        22) install_badvpn ;;
+        99) systemctl stop zivpn 2>/dev/null; rm -rf /etc/zivpn /usr/local/bin/zivpn /usr/local/bin/onepesewa; echo -e "${RED}Uninstalled.${RST}"; exit ;;
+        0) goodbye; exit ;;
+        *) echo -e "${RED}Invalid.${RST}"; read -p "Press Enter..." ;;
+    esac
+done
