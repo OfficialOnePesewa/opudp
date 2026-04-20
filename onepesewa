@@ -16,6 +16,7 @@ BOLD='\e[1m' DIM='\e[2m'
 command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 
+# --- Geo IP Fetch ---
 fetch_geo() {
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
@@ -46,6 +47,7 @@ fetch_geo() {
     printf "\r\033[K"
 }
 
+# --- Flag Emoji ---
 flag() {
     case $1 in
         us) echo "🇺🇸" ;; gb) echo "🇬🇧" ;; ca) echo "🇨🇦" ;; au) echo "🇦🇺" ;;
@@ -56,6 +58,7 @@ flag() {
     esac
 }
 
+# --- System Info ---
 get_sysinfo() {
     OS_INFO=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
     UPTIME=$(uptime -p | sed 's/up //; s/ days/d/; s/ day/d/; s/ hours/h/; s/ hour/h/; s/ minutes/m/; s/ minute/m/')
@@ -71,6 +74,7 @@ get_sysinfo() {
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
+# --- Dashboard Header ---
 print_header() {
     clear
     echo -e "${WHT}${BOLD}"
@@ -85,6 +89,7 @@ print_header() {
     echo ""
 }
 
+# --- Information Banner ---
 banner() {
     get_sysinfo
     print_header
@@ -104,6 +109,7 @@ banner() {
     echo ""
 }
 
+# --- Menu System ---
 show_menu() {
     printf "${WHT}┌──────────────────────────────────────────────────────────────────────┐${RST}\n"
     printf "${WHT}│${RST}  ${GRN}1)${RST} Start      ${GRN}2)${RST} Stop       ${GRN}3)${RST} Restart    ${GRN}4)${RST} Status       ${GRN}5)${RST} List        ${WHT}│${RST}\n"
@@ -117,6 +123,7 @@ show_menu() {
     echo ""
 }
 
+# --- Helper Functions ---
 find_free_port() {
     local port=$PORT_START
     while [ $port -le $PORT_END ]; do
@@ -145,6 +152,7 @@ remove_tracking() {
     iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
 }
 
+# --- User Management ---
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
     echo -ne "${GRN}│ Base Password  : ${RST}"; read basepass
@@ -162,13 +170,18 @@ add_user() {
         return
     fi
 
+    # Add password to config.json
     jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+
+    # Add user to database
     echo "$finalpass|$exp|$quota|$port|$devid" >> "$DB"
     echo "$finalpass|0" >> "$USAGE_DB"
     setup_tracking "$port"
     systemctl restart zivpn 2>/dev/null
 
     get_sysinfo
+
+    # Display user information
     echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
     echo -e "${CYN}│  ${GRN}${BOLD}🎉 NEW USER CREATED SUCCESSFULLY 🎉${RST}${CYN}                 │${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
@@ -192,6 +205,7 @@ add_user() {
     read -p "Press Enter to continue..."
 }
 
+# --- Other Functions (Remove, Trial, BBR, BadVPN, Goodbye) ---
 remove_user() {
     echo -ne "${GRN}Password to remove: ${RST}"; read pass
     port=$(grep "^$pass|" "$DB" | cut -d'|' -f4)
@@ -253,6 +267,7 @@ goodbye() {
     echo -e "${WHT}Channel : ${CYN}https://t.me/officialonepesewatech${RST}\n"
 }
 
+# --- Main Program Loop ---
 fetch_geo
 while true; do
     banner
