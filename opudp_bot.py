@@ -19,12 +19,21 @@ def is_admin(chat_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not is_admin(chat_id):
-        await update.message.reply_text("❌ Unauthorized.")
+        await update.message.reply_text(
+            f"❌ Unauthorized. Your Chat ID is `{chat_id}`.\n"
+            f"Ask the main admin to add this ID using the panel (option 5).",
+            parse_mode="Markdown"
+        )
         return
     await update.message.reply_text(
         "🤖 *OP UDP Panel Bot*\n\nUse /menu to see commands.",
         parse_mode="Markdown"
     )
+
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Anyone can use this command to get their Chat ID."""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"📱 Your Chat ID is: `{chat_id}`", parse_mode="Markdown")
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -115,7 +124,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not is_admin(chat_id):
-        await update.message.reply_text("❌ Unauthorized.")
+        await update.message.reply_text("❌ Unauthorized. Use /id to get your Chat ID.")
         return
     text = update.message.text.strip()
     state = context.user_data.get('awaiting')
@@ -199,6 +208,7 @@ def main():
         token = f.read().strip()
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", get_id))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
