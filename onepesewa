@@ -1,6 +1,6 @@
 #!/bin/bash
-# OP UDP PANEL – Professional Dashboard with Device ID Embedding
-# Based on official zahidbd2/udp-zivpn configuration
+# OP UDP PANEL – Professional 3D Dashboard
+# HWID binding: password = user_password + "_" + client_HWID
 
 CONFIG="/etc/zivpn/config.json"
 DB="/etc/zivpn/users.db"
@@ -16,7 +16,6 @@ BOLD='\e[1m' DIM='\e[2m'
 command -v jq &>/dev/null || apt-get install -y jq -qq 2>/dev/null
 command -v bc &>/dev/null || apt-get install -y bc -qq 2>/dev/null
 
-# --- Geo IP Fetch ---
 fetch_geo() {
     if [ -f "$CACHE_FILE" ] && [ $(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt $CACHE_TTL ]; then
         source "$CACHE_FILE"
@@ -47,7 +46,6 @@ fetch_geo() {
     printf "\r\033[K"
 }
 
-# --- Flag Emoji ---
 flag() {
     case $1 in
         us) echo "🇺🇸" ;; gb) echo "🇬🇧" ;; ca) echo "🇨🇦" ;; au) echo "🇦🇺" ;;
@@ -58,7 +56,6 @@ flag() {
     esac
 }
 
-# --- System Info ---
 get_sysinfo() {
     OS_INFO=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
     UPTIME=$(uptime -p | sed 's/up //; s/ days/d/; s/ day/d/; s/ hours/h/; s/ hour/h/; s/ minutes/m/; s/ minute/m/')
@@ -74,7 +71,6 @@ get_sysinfo() {
     [ -n "$FLAG" ] && LOC_STR="${FLAG}  $CITY, $COUNTRY" || LOC_STR="$CITY, $COUNTRY"
 }
 
-# --- Dashboard Header ---
 print_header() {
     clear
     echo -e "${WHT}${BOLD}"
@@ -89,7 +85,6 @@ print_header() {
     echo ""
 }
 
-# --- Information Banner ---
 banner() {
     get_sysinfo
     print_header
@@ -109,7 +104,6 @@ banner() {
     echo ""
 }
 
-# --- Menu System ---
 show_menu() {
     printf "${WHT}┌──────────────────────────────────────────────────────────────────────┐${RST}\n"
     printf "${WHT}│${RST}  ${GRN}1)${RST} Start      ${GRN}2)${RST} Stop       ${GRN}3)${RST} Restart    ${GRN}4)${RST} Status       ${GRN}5)${RST} List        ${WHT}│${RST}\n"
@@ -123,7 +117,6 @@ show_menu() {
     echo ""
 }
 
-# --- Helper Functions ---
 find_free_port() {
     local port=$PORT_START
     while [ $port -le $PORT_END ]; do
@@ -152,16 +145,16 @@ remove_tracking() {
     iptables -t nat -D PREROUTING -p udp --dport $port -j DNAT --to-destination :5667 2>/dev/null
 }
 
-# --- User Management ---
 add_user() {
     echo -e "\n${YLW}╭────────────────── CREATE NEW USER ──────────────────╮${RST}"
-    echo -ne "${GRN}│ Base Password  : ${RST}"; read basepass
-    echo -ne "${GRN}│ Validity (Days): ${RST}"; read days
-    echo -ne "${GRN}│ Quota (GB/MB)  : ${RST}"; read quota
-    echo -ne "${GRN}│ Device ID      : ${RST}"; read devid
+    echo -ne "${GRN}│ User Password (any text): ${RST}"; read basepass
+    echo -ne "${GRN}│ Validity (Days)         : ${RST}"; read days
+    echo -ne "${GRN}│ Quota (GB/MB)           : ${RST}"; read quota
+    echo -ne "${GRN}│ Client HWID (from ZIVPN): ${RST}"; read hwid
     echo -e "${YLW}╰──────────────────────────────────────────────────────╯${RST}"
 
-    finalpass="${basepass}_${devid}"
+    # Combine password and HWID with underscore
+    finalpass="${basepass}_${hwid}"
     exp=$(date -d "+$days days" +%Y-%m-%d)
     port=$(find_free_port)
     if [ -z "$port" ]; then
@@ -170,32 +163,29 @@ add_user() {
         return
     fi
 
-    # Add password to config.json
     jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-
-    # Add user to database
-    echo "$finalpass|$exp|$quota|$port|$devid" >> "$DB"
+    # DB format: password|expiry|quota|port|hwid
+    echo "$finalpass|$exp|$quota|$port|$hwid" >> "$DB"
     echo "$finalpass|0" >> "$USAGE_DB"
     setup_tracking "$port"
     systemctl restart zivpn 2>/dev/null
 
     get_sysinfo
-
-    # Display user information
     echo -e "\n${CYN}╭──────────────────────────────────────────────────────╮${RST}"
     echo -e "${CYN}│  ${GRN}${BOLD}🎉 NEW USER CREATED SUCCESSFULLY 🎉${RST}${CYN}                 │${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
-    echo -e "${CYN}│${RST} ${YLW}🔑 UDP Password (tap and copy):${RST}"
+    echo -e "${CYN}│${RST} ${YLW}🔑 Password to paste in ZIVPN app:${RST}"
     echo -e "${CYN}│${RST}    ${WHT}${BOLD}$finalpass${RST}"
     echo -e "${CYN}│${RST} ${DIM}────────────────────────────────────────────────${RST}"
     echo -e "${CYN}│${RST} ${GRN}📱 ZIVPN App Configuration:${RST}"
     echo -e "${CYN}│${RST}    • Server   : ${WHT}$IP${RST} ${DIM}(no port needed)${RST}"
     echo -e "${CYN}│${RST}    • Password : ${WHT}Paste the string above${RST}"
+    echo -e "${CYN}│${RST}    • HWID     : ${WHT}Automatically sent by the app${RST}"
     echo -e "${CYN}│${RST}    • Then tap APPLY and CONNECT${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
     echo -e "${CYN}│${RST} ${YLW}⏳ Expiry     :${RST} ${WHT}$exp ($days Days)${RST}"
     echo -e "${CYN}│${RST} ${YLW}📊 Quota      :${RST} ${WHT}$quota${RST}"
-    echo -e "${CYN}│${RST} ${YLW}📱 Device ID  :${RST} ${WHT}$devid${RST}"
+    echo -e "${CYN}│${RST} ${YLW}🔒 Bound HWID :${RST} ${WHT}$hwid${RST}"
     echo -e "${CYN}├──────────────────────────────────────────────────────┤${RST}"
     echo -e "${CYN}│${RST} ${MAG}🌍 Server IP  :${RST} ${WHT}$IP${RST}"
     echo -e "${CYN}│${RST} ${MAG}📍 Location   :${RST} ${WHT}$CITY, $COUNTRY${RST}"
@@ -205,9 +195,8 @@ add_user() {
     read -p "Press Enter to continue..."
 }
 
-# --- Other Functions (Remove, Trial, BBR, BadVPN, Goodbye) ---
 remove_user() {
-    echo -ne "${GRN}Password to remove: ${RST}"; read pass
+    echo -ne "${GRN}Full password to remove: ${RST}"; read pass
     port=$(grep "^$pass|" "$DB" | cut -d'|' -f4)
     [ -n "$port" ] && remove_tracking "$port"
     jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
@@ -219,24 +208,25 @@ remove_user() {
 
 trial_user() {
     echo -ne "${GRN}Minutes (1-60): ${RST}"; read mins
-    pass="trial_$(openssl rand -hex 2)"
-    devid="trial"
+    hwid="trial_$(openssl rand -hex 4)"
+    basepass="trial"
+    finalpass="${basepass}_${hwid}"
     port=$(find_free_port)
     if [ -z "$port" ]; then
         echo -e "${RED}No free port.${RST}"; read -p "Press Enter..."; return
     fi
     exp=$(date -d "+1 day" +%Y-%m-%d)
-    jq --arg p "$pass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-    echo "$pass|$exp|100MB|$port|$devid" >> "$DB"
-    echo "$pass|0" >> "$USAGE_DB"
+    jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+    echo "$finalpass|$exp|100MB|$port|$hwid" >> "$DB"
+    echo "$finalpass|0" >> "$USAGE_DB"
     setup_tracking "$port"
     systemctl restart zivpn 2>/dev/null
-    echo -e "${GRN}Trial Created: ${YLW}$pass${GRN} (expires in $mins mins)${RST}"
-    echo -e "${DIM}Server: $IP | Password: $pass${RST}"
+    echo -e "${GRN}Trial Created: ${YLW}$finalpass${GRN} (expires in $mins mins)${RST}"
+    echo -e "${DIM}Server: $IP | Password: $finalpass${RST}"
     ( sleep $((mins*60))
       remove_tracking "$port"
-      jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-      sed -i "/^$pass|/d" "$DB" "$USAGE_DB"
+      jq --arg p "$finalpass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+      sed -i "/^$finalpass|/d" "$DB" "$USAGE_DB"
       systemctl restart zivpn 2>/dev/null
     ) &
     read -p "Press Enter..."
@@ -267,7 +257,6 @@ goodbye() {
     echo -e "${WHT}Channel : ${CYN}https://t.me/officialonepesewatech${RST}\n"
 }
 
-# --- Main Program Loop ---
 fetch_geo
 while true; do
     banner
@@ -278,7 +267,7 @@ while true; do
         2) systemctl stop zivpn && echo -e "${RED}Stopped.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
         3) systemctl restart zivpn && echo -e "${GRN}Restarted.${RST}" || echo -e "${RED}Failed.${RST}"; read -p "Press Enter..." ;;
         4) systemctl status zivpn; read -p "Press Enter..." ;;
-        5) [ -f "$DB" ] && { echo -e "\n${CYN}Password | Expiry | Quota | DeviceID${RST}"; column -t -s "|" "$DB" | awk -F'|' '{print $1" | "$2" | "$3" | "$5}'; } || echo -e "${RED}No users.${RST}"; read -p "Press Enter..." ;;
+        5) [ -f "$DB" ] && { echo -e "\n${CYN}Password | Expiry | Quota | HWID${RST}"; column -t -s "|" "$DB" | awk -F'|' '{print $1" | "$2" | "$3" | "$5}'; } || echo -e "${RED}No users.${RST}"; read -p "Press Enter..." ;;
         6) add_user ;;
         7) remove_user ;;
         8|9|10|11|12|13|15|16|17|19) echo "Coming soon."; read -p "Press Enter..." ;;
