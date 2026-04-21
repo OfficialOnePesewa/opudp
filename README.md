@@ -1,18 +1,26 @@
-# 🚀 OP UDP PANEL – OnePesewa UDP Tunnel Manager
+# OP UDP PANEL – OnePesewa UDP Tunnel Manager
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-green.svg)](https://ubuntu.com/)
-[![Version](https://img.shields.io/badge/version-2.0-brightgreen.svg)]()
+![Version](https://img.shields.io/badge/version-2.0-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-**Professional UDP Tunnel Management with Device Binding, VoIP Support, and Real‑time Bandwidth Tracking.**
+Professional UDP tunnel management panel with HWID device binding, Telegram bot integration, real‑time user status, and full VoIP support.
 
-> Built on top of the reliable [ZIVPN](https://github.com/zahidbd2/udp-zivpn) UDP server, this panel gives you complete control over users, quotas, expiry, and connection stats – all from a beautiful 3D dashboard.
+## 🚀 Features
 
----
+- **UDP Tunnel Server** – Powered by ZIVPN (udp‑zivpn)
+- **User Management** – Add/remove/renew users with expiry and quota
+- **HWID Binding** – Each password is tied to a specific device (password = userpass_HWID)
+- **Bandwidth Tracking** – Per‑user traffic accounting via iptables
+- **Telegram Bot** – Full admin control + user self‑service (`/mystatus`)
+- **User Status** – Check expiry, used/total bandwidth, remaining days, active sessions (panel & bot)
+- **VoIP Ready** – SIP (5060) and RTP (6000‑19999) ports open
+- **BBR Optimizer** – One‑click TCP acceleration
+- **BadVPN** – UDP gateway for WS/TLS tunnels
+- **Auto‑cleanup** – Removes expired users automatically
 
-## 📦 One‑Line Installer (Copy & Paste)
+## 📦 Installation
 
-Run this on a **fresh Ubuntu 20.04/22.04/24.04 or Debian 11/12 VPS** as root:
+### One‑line installer (Ubuntu/Debian)
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh; sudo chmod +x install.sh; sudo ./install.sh
+bash <(curl -s https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/install.sh)
