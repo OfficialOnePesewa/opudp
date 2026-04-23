@@ -1,20 +1,22 @@
 #!/bin/bash
-# OFFICIAL ONEPESEWA UDP Installer – Debian/Ubuntu with VoIP Support
+# OFFICIAL ONEPESEWA UDP Installer – Debian/Ubuntu with Full Panel Support
 set -e
 
 G='\e[1;32m' R='\e[1;31m' Y='\e[1;33m' C='\e[1;36m' M='\e[1;35m' W='\e[1;37m' NC='\e[0m'
 BOLD='\e[1m'
 [ "$EUID" -ne 0 ] && echo -e "${R}Run as root.${NC}" && exit 1
 
-echo -e "${Y}[+] Updating & installing curl/wget...${NC}"
-apt-get update -qq
-apt-get install -y -qq curl wget
+# ── System update ────────────────────────────────────────────────────────────
+echo -e "${Y}[+] Updating packages...${NC}"
+DEBIAN_FRONTEND=noninteractive apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl wget
 
-OS=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
-echo -e "${G}[+] OS: $OS${NC}"
+# ── Fetch server location ────────────────────────────────────────────────────
+OS_INFO=$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)
+echo -e "${G}[+] OS: $OS_INFO${NC}"
 
 echo -e "${Y}[+] Fetching server info...${NC}"
-GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null)
+GEO=$(curl -4 -s --max-time 8 https://ipapi.co/json/ 2>/dev/null || echo "")
 if [ -z "$GEO" ] || ! echo "$GEO" | grep -q '"ip"'; then
     IP="N/A"; CITY="Unknown"; COUNTRY="Unknown"; ISP="Unknown"
 else
@@ -29,7 +31,7 @@ else
 fi
 LOC="$CITY, $COUNTRY"
 
-# ==================== NEW ATTRACTIVE HEADER ====================
+# ── Attractive header ────────────────────────────────────────────────────────
 clear
 echo -e "${W}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${W}║${NC}                                                                              ${W}║${NC}"
@@ -44,18 +46,33 @@ echo -e "${W}╠═════════════════════�
 echo -e "${W}║${NC}                         ${G}${BOLD}Professional UDP Tunnel Installer${NC}                         ${W}║${NC}"
 echo -e "${W}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${G}  OS       :${NC} $OS"
+echo -e "${G}  OS       :${NC} $OS_INFO"
 echo -e "${G}  Location :${NC} $LOC"
 echo -e "${G}  IP       :${NC} $IP"
 echo -e "${G}  ISP      :${NC} $ISP"
 echo -e "${G}  Admin    :${NC} @OfficialOnePesewa"
 echo ""
 
-# ==================== REST OF THE INSTALLER (unchanged) ====================
-echo -e "${Y}[1/6] Installing dependencies...${NC}"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq iptables-persistent netfilter-persistent openssl vnstat bc
+# ── 1. Install all required dependencies ─────────────────────────────────────
+echo -e "${Y}[1/7] Installing core dependencies...${NC}"
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    jq iptables-persistent netfilter-persistent openssl vnstat bc
 
-echo -e "${Y}[2/6] Detecting architecture...${NC}"
+# Install speedtest-cli
+echo -e "${Y}[+] Installing speedtest-cli...${NC}"
+if ! command -v speedtest-cli &>/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq speedtest-cli 2>/dev/null || {
+        wget -qO /usr/local/bin/speedtest-cli https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py
+        chmod +x /usr/local/bin/speedtest-cli
+    }
+fi
+
+# Install python3 & pip (required by Telegram bot & some tools)
+echo -e "${Y}[+] Installing Python3 & pip...${NC}"
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python3-pip
+
+# ── 2. Determine architecture ────────────────────────────────────────────────
+echo -e "${Y}[2/7] Detecting architecture...${NC}"
 ARCH=$(uname -m)
 case $ARCH in
     x86_64|amd64) BIN="amd64" ;;
@@ -64,18 +81,21 @@ case $ARCH in
 esac
 echo -e "${G}   Architecture: $ARCH -> $BIN${NC}"
 
-echo -e "${Y}[*] Stopping old ZIVPN service & removing binary...${NC}"
+# ── 3. Clean old installation ────────────────────────────────────────────────
+echo -e "${Y}[*] Stopping old ZIVPN service...${NC}"
 systemctl stop zivpn 2>/dev/null || true
 rm -f /usr/local/bin/zivpn
 
-echo -e "${Y}[3/6] Downloading ZIVPN binary...${NC}"
+# ── 4. Download ZIVPN binary ─────────────────────────────────────────────────
+echo -e "${Y}[3/7] Downloading ZIVPN binary...${NC}"
 wget -q --show-progress -O /usr/local/bin/zivpn \
     "https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-$BIN" || {
-    echo -e "${R}Failed to download binary.${NC}"; exit 1
+    echo -e "${R}Failed to download binary. Please check your internet or the URL.${NC}"; exit 1
 }
 chmod +x /usr/local/bin/zivpn
 
-echo -e "${Y}[4/6] Setting up config...${NC}"
+# ── 5. Create configuration ──────────────────────────────────────────────────
+echo -e "${Y}[4/7] Setting up config...${NC}"
 mkdir -p /etc/zivpn
 cat <<EOF > /etc/zivpn/config.json
 {
@@ -92,13 +112,18 @@ EOF
 touch /etc/zivpn/users.db
 touch /etc/zivpn/usage.db
 
-echo -e "${Y}[5/6] Generating SSL certificate...${NC}"
-openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 \
+# ── 6. Generate SSL certificate ──────────────────────────────────────────────
+echo -e "${Y}[5/7] Generating SSL certificate...${NC}"
+openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
     -subj "/C=GH/ST=Accra/L=Accra/O=OnePesewa/CN=onepesewa" \
     -keyout "/etc/zivpn/zivpn.key" -out "/etc/zivpn/zivpn.crt" 2>/dev/null
 
-echo -e "${Y}[6/6] Configuring firewall (VoIP ready)...${NC}"
+# ── 7. Firewall rules (VoIP ready) ───────────────────────────────────────────
+echo -e "${Y}[6/7] Configuring firewall (VoIP ready)...${NC}"
+# Disable UFW if active (it conflicts with iptables directly)
 command -v ufw &>/dev/null && ufw disable &>/dev/null
+
+# Allow essential services
 iptables -I INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 5667 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 7300 -j ACCEPT 2>/dev/null || true
@@ -106,12 +131,15 @@ iptables -t nat -A PREROUTING -p udp --dport 7300 -j DNAT --to-destination :5667
 iptables -I INPUT -p udp --dport 5060 -j ACCEPT 2>/dev/null || true
 iptables -I INPUT -p udp --dport 6000:19999 -j ACCEPT 2>/dev/null || true
 iptables -t nat -A PREROUTING -p udp --dport 6000:19999 -j DNAT --to-destination :5667 2>/dev/null || true
+
+# Save rules permanently
 if command -v netfilter-persistent &>/dev/null; then
     netfilter-persistent save
 elif command -v iptables-save &>/dev/null; then
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 
+# ── 8. Systemd service for ZIVPN ─────────────────────────────────────────────
 cat <<EOF > /etc/systemd/system/zivpn.service
 [Unit]
 Description=ZIVPN UDP Server
@@ -130,13 +158,36 @@ systemctl daemon-reload
 systemctl enable zivpn
 systemctl start zivpn
 
-echo -e "${Y}[+] Installing onepesewa panel from your repo...${NC}"
+# ── 9. Download & install the OP UDP Panel ───────────────────────────────────
+echo -e "${Y}[7/7] Downloading panel script...${NC}"
 PANEL_URL="https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa"
+# Download panel, verify it's not empty
 wget -qO /usr/local/bin/onepesewa "$PANEL_URL" || {
-    echo -e "${R}Failed to download panel from $PANEL_URL${NC}"; exit 1
+    echo -e "${R}Failed to download panel from $PANEL_URL${NC}"
+    exit 1
 }
+
+if [ ! -s /usr/local/bin/onepesewa ]; then
+    echo -e "${R}Downloaded panel file is empty. Aborting.${NC}"
+    exit 1
+fi
+
 chmod +x /usr/local/bin/onepesewa
 
+# Also download Telegram bot script (needed for bot option to work)
+BOT_SCRIPT="/usr/local/bin/opudp_bot.py"
+if [ ! -f "$BOT_SCRIPT" ]; then
+    wget -qO "$BOT_SCRIPT" "https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/opudp_bot.py" 2>/dev/null || echo -e "${Y}Bot script not found, but you can add it later.${NC}"
+    chmod +x "$BOT_SCRIPT" 2>/dev/null || true
+fi
+
+# ── 10. Start the usage tracking daemon ──────────────────────────────────────
+# (Called from within the panel, but ensure it runs after installation)
+if [ -f /usr/local/bin/onepesewa ]; then
+    /usr/local/bin/onepesewa --update-usage &
+fi
+
+# ── Installation summary ─────────────────────────────────────────────────────
 echo -e "\n${C}====================================================${NC}"
 echo -e "${G}         INSTALLATION COMPLETE!${NC}"
 echo -e "${C}====================================================${NC}"
@@ -150,20 +201,21 @@ echo -e "${C}====================================================${NC}"
 echo -e "${Y} Type 'onepesewa' to open the panel.${NC}"
 echo -e "${C}====================================================${NC}"
 
+# ── Optional BBR installation ────────────────────────────────────────────────
 echo ""
-echo -e "${Y}Do you want to install BBR + TCP Optimizer? (y/n)${NC}"
+echo -ne "${Y}Do you want to install BBR + TCP Optimizer? (y/n) ${NC}"
 read -r answer_bbr
 if [[ "$answer_bbr" =~ ^[Yy]$ ]]; then
     echo -e "${Y}[+] Installing BBR + TCP Optimizer...${NC}"
-    apt install curl -y
     bash <(curl -s https://raw.githubusercontent.com/opiran-club/VPS-Optimizer/main/optimizer.sh --ipv4)
     echo -e "${G}BBR Optimization completed.${NC}"
 else
     echo -e "${C}Skipped BBR installation.${NC}"
 fi
 
+# ── Optional BadVPN installation ─────────────────────────────────────────────
 echo ""
-echo -e "${Y}Do you want to install BadVPN (UDP Gateway)? (y/n)${NC}"
+echo -ne "${Y}Do you want to install BadVPN (UDP Gateway)? (y/n) ${NC}"
 read -r answer_badvpn
 if [[ "$answer_badvpn" =~ ^[Yy]$ ]]; then
     echo -e "${Y}[+] Installing BadVPN UDP Gateway...${NC}"
