@@ -26,10 +26,22 @@ RED='\e[1;31m'  GRN='\e[1;32m'  YLW='\e[1;33m'  BLU='\e[1;34m'
 MAG='\e[1;35m'  CYN='\e[1;36m'  WHT='\e[1;37m'  RST='\e[0m'
 BOLD='\e[1m'    DIM='\e[2m'
 
-# ── Dependencies ───────────────────────────────────────────────
+# ── Dependencies (auto-install) ───────────────────────────────
+NEED_UPDATE=0
 for pkg in jq bc wget openssl; do
-    command -v $pkg &>/dev/null || apt-get install -y $pkg -qq 2>/dev/null
+    if ! command -v $pkg &>/dev/null; then
+        NEED_UPDATE=1
+        break
+    fi
 done
+if [ $NEED_UPDATE -eq 1 ]; then
+    apt-get update -qq 2>/dev/null
+    for pkg in jq bc wget openssl; do
+        if ! command -v $pkg &>/dev/null; then
+            apt-get install -y $pkg -qq 2>/dev/null
+        fi
+    done
+fi
 
 # ══════════════════════════════════════════════════════════════
 #  FIRE ASCII LOGO
@@ -242,8 +254,9 @@ add_user_core() {
     exp=$(date -d "+${days} days" +%Y-%m-%d 2>/dev/null || date -v "+${days}d" +%Y-%m-%d)
     port=$(find_free_port)
     [ -z "$port" ] && { echo "ERROR: No free ports"; return 1; }
-    [ -f "$CONFIG" ] && \
-        jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json \
+    mkdir -p "$(dirname "$CONFIG")"
+    [ -f "$CONFIG" ] || echo '{"auth":{"config":[]}}' > "$CONFIG"
+    jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json \
         && mv /tmp/zivpn_tmp.json "$CONFIG"
     echo "${finalpass}|${exp}|${quota}|${port}|${hwid}|0" >> "$DB"
     echo "${finalpass}|0" >> "$USAGE_DB"
@@ -677,7 +690,7 @@ do_update() {
     self=$(readlink -f "$0")
     tmp="/tmp/opudp_update_$$"
     if wget -qO "$tmp" \
-        "https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/opudp" \
+        "https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa" \
         2>/dev/null; then
         chmod +x "$tmp"
         cp "$self" "${self}.bak" 2>/dev/null
@@ -729,8 +742,9 @@ do_trial_user() {
     port=$(find_free_port)
     [ -z "$port" ] && { echo -e "  ${RED}✘  No free ports.${RST}"; press_enter; return; }
     exp=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v +1d +%Y-%m-%d)
-    [ -f "$CONFIG" ] && \
-        jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json \
+    mkdir -p "$(dirname "$CONFIG")"
+    [ -f "$CONFIG" ] || echo '{"auth":{"config":[]}}' > "$CONFIG"
+    jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" > /tmp/zivpn_tmp.json \
         && mv /tmp/zivpn_tmp.json "$CONFIG"
     echo "${finalpass}|${exp}|100MB|${port}|${hwid}|0" >> "$DB"
     echo "${finalpass}|0" >> "$USAGE_DB"
@@ -962,7 +976,7 @@ do_uninstall() {
     echo -e "  ${RED}${BOLD}╚══════════════════════════════════════════════════════╝${RST}\n"
     echo -e "  ${DIM}  • Stops ZIVPN + Telegram bot${RST}"
     echo -e "  ${DIM}  • Deletes all users, config, data${RST}"
-    echo -e "  ${DIM}  • Removes opudp command${RST}\n"
+    echo -e "  ${DIM}  • Removes onepesewa command${RST}\n"
     echo -ne "  ${RED}Type 'UNINSTALL' to confirm: ${RST}"; read -r confirm
     [ "$confirm" != "UNINSTALL" ] && {
         echo -e "\n  ${YLW}Aborted.${RST}"; press_enter; return
@@ -1116,8 +1130,9 @@ if [[ "$1" == "--bot-"* ]]; then
             finalpass="trial_${hwid}"
             port=$(find_free_port)
             exp=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v +1d +%Y-%m-%d)
-            [ -f "$CONFIG" ] && \
-                jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" \
+            mkdir -p "$(dirname "$CONFIG")"
+            [ -f "$CONFIG" ] || echo '{"auth":{"config":[]}}' > "$CONFIG"
+            jq --arg p "$finalpass" '.auth.config += [$p]' "$CONFIG" \
                 > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
             echo "${finalpass}|${exp}|100MB|${port}|${hwid}|0" >> "$DB"
             echo "${finalpass}|0" >> "$USAGE_DB"
@@ -1190,3 +1205,9 @@ while true; do
         *)  echo -e "\n  ${RED}✘  Invalid option.${RST}"; sleep 1 ;;
     esac
 done
+EOF
+
+# Make executable
+chmod +x /usr/local/bin/onepesewa
+
+echo "✅ Script installed as 'onepesewa'. Run it with: onepesewa"
