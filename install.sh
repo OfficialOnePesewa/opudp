@@ -91,9 +91,10 @@ echo ""
 #  STEP 1 – Dependencies
 # ══════════════════════════════════════════════════════════════
 step 1 6 "Installing dependencies"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    jq iptables-persistent netfilter-persistent openssl vnstat bc 2>/dev/null
-ok "jq  bc  openssl  vnstat  iptables-persistent  installed"
+# Avoid prompts for iptables-persistent
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+    jq iptables-persistent netfilter-persistent openssl vnstat bc python3-pip 2>/dev/null
+ok "jq  bc  openssl  vnstat  iptables-persistent  python3-pip  installed"
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 2 – Architecture
@@ -180,7 +181,8 @@ net.core.rmem_default=16777216
 net.core.wmem_default=16777216
 net.ipv4.udp_mem=65536 131072 262144
 SYSCTL
-ok "Sysctl persisted → /etc/sysctl.d/99-opudp.conf"
+sysctl --system >/dev/null 2>&1
+ok "Sysctl persisted and applied"
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 5 – Firewall
@@ -246,22 +248,21 @@ else
 fi
 
 # ══════════════════════════════════════════════════════════════
-#  STEP 6 – Download OPUDP Panel
+#  STEP 6 – Download OPUDP Panel (onepesewa)
 # ══════════════════════════════════════════════════════════════
 step 6 6 "Installing OPUDP Panel"
 
-PANEL_URL="https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/opudp"
-if wget -qO /usr/local/bin/opudp "$PANEL_URL" 2>/dev/null; then
-    chmod +x /usr/local/bin/opudp
-    ok "Panel installed → /usr/local/bin/opudp"
-    info "Command: opudp"
+PANEL_URL="https://raw.githubusercontent.com/OfficialOnePesewa/OFFICIAL-ONEPESEWA-UDP/main/onepesewa"
+if wget -qO /usr/local/bin/onepesewa "$PANEL_URL"; then
+    chmod +x /usr/local/bin/onepesewa
+    ok "Panel installed → /usr/local/bin/onepesewa"
+    # Create legacy alias for backward compatibility
+    ln -sf /usr/local/bin/onepesewa /usr/local/bin/opudp 2>/dev/null || true
+    info "Alias: opudp → onepesewa"
 else
-    warn "Could not download panel. Install manually later."
+    err "Failed to download panel from $PANEL_URL"
+    exit 1
 fi
-
-# Legacy alias
-ln -sf /usr/local/bin/opudp /usr/local/bin/onepesewa 2>/dev/null || true
-ok "Legacy alias: onepesewa → opudp"
 
 # ══════════════════════════════════════════════════════════════
 #  COMPLETION
@@ -277,7 +278,7 @@ echo -e "  ${WHT}╠════════════════════
 printf  "  ${WHT}║${RST}  ${GRN}🔌 ZIVPN Port  :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "5667 (UDP)"
 printf  "  ${WHT}║${RST}  ${GRN}🎯 NAT Range   :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "6000–19999  +  7300  → 5667"
 printf  "  ${WHT}║${RST}  ${GRN}📞 VoIP SIP    :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "5060 (UDP)"
-printf  "  ${WHT}║${RST}  ${MAG}📋 Panel cmd   :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "opudp   (or: onepesewa)"
+printf  "  ${WHT}║${RST}  ${MAG}📋 Panel cmd   :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "onepesewa   (or: opudp)"
 echo -e "  ${WHT}╠═══════════════════════════════════════════════════════════════╣${RST}"
 printf  "  ${WHT}║${RST}  ${MAG}👤 Admin       :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "$ADMIN_HANDLE"
 printf  "  ${WHT}║${RST}  ${CYN}📢 Channel     :${RST}  ${WHT}%-44s${RST}${WHT}║${RST}\n" "$TG_CHANNEL"
@@ -314,5 +315,5 @@ else
 fi
 
 echo ""
-echo -e "  ${GRN}${BOLD}✔  All done!  Type ${CYN}opudp${GRN} to open the management panel.${RST}"
+echo -e "  ${GRN}${BOLD}✔  All done!  Type ${CYN}onepesewa${GRN} to open the management panel.${RST}"
 echo -e "  ${DIM}  ${ADMIN_HANDLE}  |  ${TG_CHANNEL}${RST}\n"
