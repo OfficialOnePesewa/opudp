@@ -17,7 +17,7 @@ BOT_SERVICE_FILE="/etc/systemd/system/opudp-bot.service"
 BOT_SCRIPT="/usr/local/bin/opudp_bot.py"
 CONN_LIMIT_FILE="/etc/zivpn/conn_limits.db"
 BACKUP_DIR="/etc/zivpn/backups"
-PANEL_VERSION="2.0.0"
+PANEL_VERSION="2.1.0"
 ADMIN_HANDLE="@OfficialOnePesewa"
 TG_CHANNEL="https://t.me/officialonepesewatech"
 
@@ -28,7 +28,7 @@ BOLD='\e[1m'    DIM='\e[2m'
 
 # ── Dependencies (auto-install) ───────────────────────────────
 NEED_UPDATE=0
-for pkg in jq bc wget openssl; do
+for pkg in jq bc wget openssl conntrack; do
     if ! command -v $pkg &>/dev/null; then
         NEED_UPDATE=1
         break
@@ -36,7 +36,7 @@ for pkg in jq bc wget openssl; do
 done
 if [ $NEED_UPDATE -eq 1 ]; then
     apt-get update -qq 2>/dev/null
-    for pkg in jq bc wget openssl; do
+    for pkg in jq bc wget openssl conntrack; do
         if ! command -v $pkg &>/dev/null; then
             apt-get install -y $pkg -qq 2>/dev/null
         fi
@@ -184,7 +184,8 @@ show_menu() {
     echo -e "${WHT}╠═══════════════════════════════════════════════════════════════╣${RST}"
     echo -e "${WHT}║${RST}  ${YLW}${BOLD}◈  SYSTEM & TOOLS${RST}                                             ${WHT}║${RST}"
     printf  "${WHT}║${RST}  ${GRN}[15]${RST} Backup       ${GRN}[16]${RST} Restore     ${GRN}[17]${RST} Port Range  ${GRN}[18]${RST} ${YLW}Update${RST}  ${WHT}║${RST}\n"
-    printf  "${WHT}║${RST}  ${GRN}[21]${RST} 🚀 BBR Opt    ${GRN}[22]${RST} 📡 BadVPN    ${GRN}[23]${RST} 🤖 Bot Config              ${WHT}║${RST}\n"
+    printf  "${WHT}║${RST}  ${GRN}[21]${RST} 🚀 BBR Opt    ${GRN}[22]${RST} 📡 BadVPN    ${GRN}[23]${RST} 🤖 Bot Config  ${GRN}[25]${RST} 🔒 LimitEnf${WHT}║${RST}\n"
+    printf  "${WHT}║${RST}  ${GRN}[26]${RST} 📊 Limit Status                                                ${WHT}║${RST}\n"
     echo -e "${WHT}╠═══════════════════════════════════════════════════════════════╣${RST}"
     printf  "${WHT}║${RST}  ${RED}[99]${RST} 🗑  UNINSTALL                        ${GRN}[0]${RST} 🚪 Exit       ${WHT}║${RST}\n"
     echo -e "${WHT}╚═══════════════════════════════════════════════════════════════╝${RST}"
@@ -247,9 +248,13 @@ quota_to_bytes() {
     else echo "0"; fi
 }
 
+# ══════════════════════════════════════════════════════════════
+#  RANDOM PASSWORD (32 chars) – NOT derived from HWID
+# ══════════════════════════════════════════════════════════════
 add_user_core() {
     local basepass="$1" days="$2" quota="$3" hwid="$4"
-    local finalpass="${basepass}_${hwid}"
+    # Generate a truly random password (32 characters, no relation to HWID)
+    local finalpass=$(openssl rand -base64 32 | tr -d '/=+' | head -c32)
     local exp port
     exp=$(date -d "+${days} days" +%Y-%m-%d 2>/dev/null || date -v "+${days}d" +%Y-%m-%d)
     port=$(find_free_port)
@@ -266,6 +271,62 @@ add_user_core() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#  ENFORCEMENT SYSTEM (cron + conntrack)
+# ══════════════════════════════════════════════════════════════
+ENFORCE_SCRIPT="/usr/local/bin/opudp_enforce_limits.sh"
+ENFORCE_CRON="/etc/cron.d/opudp_connlimit"
+
+write_enforce_script() {
+    cat > "$ENFORCE_SCRIPT" <<'ENFEOF'
+#!/bin/bash
+DB="/etc/zivpn/users.db"
+CONN_LIMIT_FILE="/etc/zivpn/conn_limits.db"
+LOG_FILE="/var/log/opudp_enforce.log"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
+
+[ ! -f "$DB" ] && exit 0
+
+while IFS='|' read -r pass expiry quota port hwid used; do
+    [ -z "$port" ] && continue
+    limit=$(grep "^${pass}|" "$CONN_LIMIT_FILE" 2>/dev/null | cut -d'|' -f2)
+    [ -z "$limit" ] || [ "$limit" -eq 0 ] && continue
+    sessions=$(ss -un state established 2>/dev/null | grep -c ":${port} " || echo 0)
+    if [ "$sessions" -gt "$limit" ]; then
+        log "User $pass (port $port) has $sessions sessions, limit $limit – killing excess connections"
+        # Kill all conntrack entries for this port (brutal but effective)
+        conntrack -D -p udp --dport "$port" 2>/dev/null
+    fi
+done < "$DB"
+ENFEOF
+    chmod +x "$ENFORCE_SCRIPT"
+}
+
+enable_enforcement() {
+    write_enforce_script
+    echo "* * * * * root $ENFORCE_SCRIPT" > "$ENFORCE_CRON"
+    if ! command -v conntrack &>/dev/null; then
+        apt-get install -y conntrack -qq 2>/dev/null
+    fi
+    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
+    echo -e "\n  ${GRN}✔ Connection limit enforcement enabled (cron every minute).${RST}"
+}
+
+disable_enforcement() {
+    rm -f "$ENFORCE_SCRIPT" "$ENFORCE_CRON"
+    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
+    echo -e "\n  ${YLW}⚠ Enforcement disabled.${RST}"
+}
+
+enforcement_status() {
+    if [ -f "$ENFORCE_CRON" ]; then
+        echo -e "  ${GRN}● Enabled${RST} (cron job every minute)"
+    else
+        echo -e "  ${RED}● Disabled${RST}"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════
 #  [1] START
 # ══════════════════════════════════════════════════════════════
 do_start() {
@@ -278,9 +339,7 @@ do_start() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [2] STOP
-# ══════════════════════════════════════════════════════════════
+# [2] STOP
 do_stop() {
     echo -e "\n  ${YLW}▸ Stopping ZIVPN...${RST}"
     if systemctl stop zivpn 2>/dev/null; then
@@ -291,9 +350,7 @@ do_stop() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [3] RESTART
-# ══════════════════════════════════════════════════════════════
+# [3] RESTART
 do_restart() {
     echo -e "\n  ${YLW}▸ Restarting ZIVPN...${RST}"
     if systemctl restart zivpn 2>/dev/null; then
@@ -304,9 +361,7 @@ do_restart() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [4] STATUS
-# ══════════════════════════════════════════════════════════════
+# [4] STATUS
 do_status() {
     echo -e "\n  ${CYN}${BOLD}◈  ZIVPN Service Status${RST}\n"
     systemctl status zivpn --no-pager -l 2>/dev/null || \
@@ -314,9 +369,7 @@ do_status() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [5] LIST USERS
-# ══════════════════════════════════════════════════════════════
+# [5] LIST USERS
 do_list() {
     echo -e "\n  ${CYN}${BOLD}◈  Registered Users${RST}\n"
     if [ ! -f "$DB" ] || [ ! -s "$DB" ]; then
@@ -340,18 +393,16 @@ do_list() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [6] ADD USER
-# ══════════════════════════════════════════════════════════════
+# [6] ADD USER
 do_add_user() {
     echo ""
     echo -e "  ${YLW}╔══════════════════════════════════════════════════════════════╗${RST}"
     echo -e "  ${YLW}║${RST}  ${CYN}${BOLD}  ➕  CREATE NEW USER${RST}                                      ${YLW}║${RST}"
     echo -e "  ${YLW}╠══════════════════════════════════════════════════════════════╣${RST}"
-    echo -ne "  ${YLW}║${RST}  ${GRN}Username / Password base    :${RST} "; read -r basepass
-    echo -ne "  ${YLW}║${RST}  ${GRN}Validity (days)             :${RST} "; read -r days
-    echo -ne "  ${YLW}║${RST}  ${GRN}Data Quota (e.g. 10GB/500MB):${RST} "; read -r quota
-    echo -ne "  ${YLW}║${RST}  ${GRN}Client HWID (from ZIVPN app):${RST} "; read -r hwid
+    echo -ne "  ${YLW}║${RST}  ${GRN}Username / Identifier         :${RST} "; read -r basepass
+    echo -ne "  ${YLW}║${RST}  ${GRN}Validity (days)               :${RST} "; read -r days
+    echo -ne "  ${YLW}║${RST}  ${GRN}Data Quota (e.g. 10GB/500MB)  :${RST} "; read -r quota
+    echo -ne "  ${YLW}║${RST}  ${GRN}Client HWID (from ZIVPN app)  :${RST} "; read -r hwid
     echo -e "  ${YLW}╚══════════════════════════════════════════════════════════════╝${RST}"
 
     [[ -z "$basepass" || -z "$days" || -z "$quota" || -z "$hwid" ]] && {
@@ -375,7 +426,7 @@ do_add_user() {
         echo -e "  ${GRN}╠══════════════════════════════════════════════════════════════╣${RST}"
         echo -e "  ${GRN}║${RST}  ${CYN}📱  ZIVPN App Setup:${RST}                                      ${GRN}║${RST}"
         printf  "  ${GRN}║${RST}      ${WHT}Server IP :${RST} %-42s${GRN}║${RST}\n" "$IP"
-        printf  "  ${GRN}║${RST}      ${WHT}Password  :${RST} %-42s${GRN}║${RST}\n" "Paste string above"
+        printf  "  ${GRN}║${RST}      ${WHT}Password  :${RST} %-42s${GRN}║${RST}\n" "Paste the random string above"
         printf  "  ${GRN}║${RST}      ${WHT}HWID      :${RST} %-42s${GRN}║${RST}\n" "Auto-sent by app"
         echo -e "  ${GRN}║${RST}      Tap ${GRN}APPLY${RST} → ${GRN}CONNECT${RST}                                  ${GRN}║${RST}"
         echo -e "  ${GRN}╠══════════════════════════════════════════════════════════════╣${RST}"
@@ -397,9 +448,7 @@ do_add_user() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [7] REMOVE USER
-# ══════════════════════════════════════════════════════════════
+# [7] REMOVE USER
 do_remove_user() {
     echo -e "\n  ${RED}${BOLD}◈  Remove User${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -417,14 +466,13 @@ do_remove_user() {
         && mv /tmp/zivpn_tmp.json "$CONFIG"
     sed -i "/^${pass}|/d" "$DB"       2>/dev/null
     sed -i "/^${pass}|/d" "$USAGE_DB" 2>/dev/null
+    sed -i "/^${pass}|/d" "$CONN_LIMIT_FILE" 2>/dev/null
     systemctl restart zivpn 2>/dev/null
     echo -e "\n  ${GRN}✔  User ${YLW}${pass}${GRN} removed.${RST}"
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [8] RENEW USER
-# ══════════════════════════════════════════════════════════════
+# [8] RENEW USER
 do_renew_user() {
     echo -e "\n  ${CYN}${BOLD}◈  Renew / Extend User${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -449,9 +497,7 @@ do_renew_user() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [9] CLEANUP EXPIRED
-# ══════════════════════════════════════════════════════════════
+# [9] CLEANUP EXPIRED
 do_cleanup() {
     echo -e "\n  ${YLW}${BOLD}◈  Cleanup Expired Users${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -467,6 +513,7 @@ do_cleanup() {
                 && mv /tmp/zivpn_tmp.json "$CONFIG"
             sed -i "/^${pass}|/d" "$DB"       2>/dev/null
             sed -i "/^${pass}|/d" "$USAGE_DB" 2>/dev/null
+            sed -i "/^${pass}|/d" "$CONN_LIMIT_FILE" 2>/dev/null
             removed=$((removed + 1))
         fi
     done < <(cat "$DB")
@@ -475,9 +522,7 @@ do_cleanup() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [10] CONNECTION STATS
-# ══════════════════════════════════════════════════════════════
+# [10] CONNECTION STATS
 do_conn_stats() {
     echo -e "\n  ${CYN}${BOLD}◈  Connection Statistics${RST}\n"
     echo -e "  ${WHT}── Active UDP Connections ──────────────────────────────${RST}"
@@ -500,9 +545,7 @@ do_conn_stats() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [11] BANDWIDTH + EXPIRY REPORT
-# ══════════════════════════════════════════════════════════════
+# [11] BANDWIDTH + EXPIRY REPORT
 do_bw_expiry() {
     echo -e "\n  ${CYN}${BOLD}◈  Bandwidth & Expiry Report${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -535,9 +578,7 @@ do_bw_expiry() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [12] RESET BANDWIDTH
-# ══════════════════════════════════════════════════════════════
+# [12] RESET BANDWIDTH
 do_reset_bw() {
     echo -e "\n  ${YLW}${BOLD}◈  Reset Bandwidth${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -567,9 +608,7 @@ do_reset_bw() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [13] SPEED TEST
-# ══════════════════════════════════════════════════════════════
+# [13] SPEED TEST
 do_speedtest() {
     echo -e "\n  ${CYN}${BOLD}◈  Speed Test${RST}\n"
     if command -v speedtest-cli &>/dev/null; then
@@ -597,9 +636,7 @@ do_speedtest() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [14] LIVE LOGS
-# ══════════════════════════════════════════════════════════════
+# [14] LIVE LOGS
 do_live_logs() {
     echo -e "\n  ${CYN}${BOLD}◈  Live ZIVPN Logs${RST}  ${DIM}(Ctrl+C to stop)${RST}\n"
     journalctl -u zivpn -f --no-pager 2>/dev/null \
@@ -608,9 +645,7 @@ do_live_logs() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [15] BACKUP
-# ══════════════════════════════════════════════════════════════
+# [15] BACKUP
 do_backup() {
     echo -e "\n  ${CYN}${BOLD}◈  Backup${RST}\n"
     mkdir -p "$BACKUP_DIR"
@@ -634,9 +669,7 @@ do_backup() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [16] RESTORE
-# ══════════════════════════════════════════════════════════════
+# [16] RESTORE
 do_restore() {
     echo -e "\n  ${YLW}${BOLD}◈  Restore${RST}\n"
     mkdir -p "$BACKUP_DIR"
@@ -664,9 +697,7 @@ do_restore() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [17] PORT RANGE
-# ══════════════════════════════════════════════════════════════
+# [17] PORT RANGE
 do_port_range() {
     echo -e "\n  ${CYN}${BOLD}◈  Configure Port Range${RST}\n"
     echo -e "  ${DIM}Current: ${WHT}${PORT_START}${RST}${DIM} – ${WHT}${PORT_END}${RST}"
@@ -681,9 +712,7 @@ do_port_range() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [18] UPDATE
-# ══════════════════════════════════════════════════════════════
+# [18] UPDATE
 do_update() {
     echo -e "\n  ${YLW}${BOLD}◈  Updating Panel...${RST}\n"
     local self tmp
@@ -704,9 +733,7 @@ do_update() {
     fi
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [19] CONNECTION LIMIT
-# ══════════════════════════════════════════════════════════════
+# [19] CONNECTION LIMIT (with enforcement toggle)
 do_conn_limit() {
     echo -e "\n  ${CYN}${BOLD}◈  Connection Limit${RST}\n"
     echo -ne "  ${GRN}Enter full password: ${RST}"; read -r pass
@@ -722,14 +749,27 @@ do_conn_limit() {
         echo -e "  ${RED}✘  Invalid.${RST}"; press_enter; return
     }
     sed -i "/^${pass}|/d" "$CONN_LIMIT_FILE" 2>/dev/null
-    echo "${pass}|${lim}" >> "$CONN_LIMIT_FILE"
-    echo -e "\n  ${GRN}✔  Limit set to ${WHT}${lim}${GRN} for ${YLW}${pass}${RST}"
+    if [ "$lim" -gt 0 ]; then
+        echo "${pass}|${lim}" >> "$CONN_LIMIT_FILE"
+        echo -e "\n  ${GRN}✔  Limit set to ${WHT}${lim}${GRN} for ${YLW}${pass}${RST}"
+    else
+        echo -e "\n  ${GRN}✔  Limit removed (unlimited) for ${YLW}${pass}${RST}"
+    fi
+    # Offer to enable global enforcement if not already active
+    echo ""
+    if [ ! -f "$ENFORCE_CRON" ]; then
+        echo -e "  ${YLW}Global connection limit enforcement is currently OFF.${RST}"
+        echo -ne "  ${GRN}Enable it now? (y/N): ${RST}"; read -r en
+        if [[ "$en" =~ ^[Yy]$ ]]; then
+            enable_enforcement
+        fi
+    else
+        enforcement_status
+    fi
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [20] TRIAL USER
-# ══════════════════════════════════════════════════════════════
+# [20] TRIAL USER
 do_trial_user() {
     echo -e "\n  ${CYN}${BOLD}◈  Trial User${RST}\n"
     echo -ne "  ${GRN}Duration in minutes [1-60]: ${RST}"; read -r mins
@@ -738,7 +778,7 @@ do_trial_user() {
     }
     local hwid finalpass port exp
     hwid="trial_$(openssl rand -hex 4)"
-    finalpass="trial_${hwid}"
+    finalpass=$(openssl rand -base64 32 | tr -d '/=+' | head -c32)
     port=$(find_free_port)
     [ -z "$port" ] && { echo -e "  ${RED}✘  No free ports.${RST}"; press_enter; return; }
     exp=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v +1d +%Y-%m-%d)
@@ -771,14 +811,13 @@ do_trial_user() {
             && mv /tmp/zivpn_tmp.json "$CONFIG"
         sed -i "/^${finalpass}|/d" "$DB"       2>/dev/null
         sed -i "/^${finalpass}|/d" "$USAGE_DB" 2>/dev/null
+        sed -i "/^${finalpass}|/d" "$CONN_LIMIT_FILE" 2>/dev/null
         systemctl restart zivpn 2>/dev/null
     ) &
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [21] BBR
-# ══════════════════════════════════════════════════════════════
+# [21] BBR
 do_bbr() {
     echo -e "\n  ${YLW}${BOLD}◈  BBR + TCP Optimizer${RST}\n"
     echo -ne "  ${GRN}Continue? [y/N]: ${RST}"; read -r c
@@ -791,9 +830,7 @@ do_bbr() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [22] BADVPN
-# ══════════════════════════════════════════════════════════════
+# [22] BADVPN
 do_badvpn() {
     echo -e "\n  ${YLW}${BOLD}◈  BadVPN UDPGW${RST}\n"
     echo -ne "  ${GRN}Install? [y/N]: ${RST}"; read -r c
@@ -805,9 +842,7 @@ do_badvpn() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [23] TELEGRAM BOT CONFIG
-# ══════════════════════════════════════════════════════════════
+# [23] TELEGRAM BOT CONFIG
 config_telegram() {
     while true; do
         clear
@@ -911,9 +946,7 @@ EOF
     done
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [24] USER STATUS
-# ══════════════════════════════════════════════════════════════
+# [24] USER STATUS
 do_user_status() {
     echo -e "\n  ${CYN}${BOLD}◈  User Account Status${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -967,16 +1000,45 @@ do_user_status() {
     press_enter
 }
 
-# ══════════════════════════════════════════════════════════════
-#  [99] UNINSTALL
-# ══════════════════════════════════════════════════════════════
+# [25] TOGGLE ENFORCEMENT
+do_enforcement_menu() {
+    echo -e "\n  ${CYN}${BOLD}◈  Connection Limit Enforcement${RST}\n"
+    enforcement_status
+    echo ""
+    echo -ne "  ${GRN}Enable (E) / Disable (D) / Back (B): ${RST}"; read -r ed
+    case $ed in
+        [Ee]) enable_enforcement ;;
+        [Dd]) disable_enforcement ;;
+        *) ;;
+    esac
+    press_enter
+}
+
+# [26] SHOW LIMITS STATUS
+do_limits_status() {
+    echo -e "\n  ${CYN}${BOLD}◈  Enforcement Status & Limits${RST}\n"
+    enforcement_status
+    echo ""
+    if [ -f "$CONN_LIMIT_FILE" ] && [ -s "$CONN_LIMIT_FILE" ]; then
+        echo -e "  ${WHT}Configured per-user limits:${RST}"
+        while IFS='|' read -r pass lim; do
+            echo -e "    ${YLW}${pass:0:24}${RST} → ${lim} concurrent session(s)"
+        done < "$CONN_LIMIT_FILE"
+    else
+        echo -e "  ${DIM}No per-user limits set.${RST}"
+    fi
+    press_enter
+}
+
+# [99] UNINSTALL
 do_uninstall() {
     echo -e "\n  ${RED}${BOLD}╔══════════════════════════════════════════════════════╗${RST}"
     echo -e "  ${RED}${BOLD}║   ⚠  WARNING – UNINSTALL OPUDP PANEL               ║${RST}"
     echo -e "  ${RED}${BOLD}╚══════════════════════════════════════════════════════╝${RST}\n"
     echo -e "  ${DIM}  • Stops ZIVPN + Telegram bot${RST}"
     echo -e "  ${DIM}  • Deletes all users, config, data${RST}"
-    echo -e "  ${DIM}  • Removes onepesewa command${RST}\n"
+    echo -e "  ${DIM}  • Removes onepesewa command${RST}"
+    echo -e "  ${DIM}  • Disables connection limit enforcement${RST}\n"
     echo -ne "  ${RED}Type 'UNINSTALL' to confirm: ${RST}"; read -r confirm
     [ "$confirm" != "UNINSTALL" ] && {
         echo -e "\n  ${YLW}Aborted.${RST}"; press_enter; return
@@ -984,6 +1046,9 @@ do_uninstall() {
     echo -e "\n  ${YLW}▸ Stopping services...${RST}"
     systemctl stop    zivpn opudp-bot 2>/dev/null
     systemctl disable zivpn opudp-bot 2>/dev/null
+    echo -e "  ${YLW}▸ Disabling enforcement cron...${RST}"
+    rm -f "$ENFORCE_SCRIPT" "$ENFORCE_CRON"
+    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
     echo -e "  ${YLW}▸ Removing iptables rules...${RST}"
     [ -f "$DB" ] && while IFS='|' read -r pass exp quota port hwid used; do
         [ -n "$port" ] && remove_tracking "$port"
@@ -993,17 +1058,17 @@ do_uninstall() {
     rm -f  /usr/local/bin/zivpn \
            /usr/local/bin/opudp \
            /usr/local/bin/onepesewa \
-           /usr/local/bin/opudp_bot.py 2>/dev/null
-    rm -f  /etc/systemd/system/zivpn.service \
+           /usr/local/bin/opudp_bot.py \
+           /usr/local/bin/opudp_enforce_limits.sh \
+           /etc/cron.d/opudp_connlimit \
+           /etc/systemd/system/zivpn.service \
            /etc/systemd/system/opudp-bot.service 2>/dev/null
     systemctl daemon-reload 2>/dev/null
     echo -e "\n  ${GRN}✔  Uninstalled. Goodbye! — ${ADMIN_HANDLE}${RST}\n"
     exit 0
 }
 
-# ══════════════════════════════════════════════════════════════
-#  GOODBYE
-# ══════════════════════════════════════════════════════════════
+# GOODBYE
 goodbye() {
     clear
     print_logo
@@ -1046,7 +1111,7 @@ if [[ "$1" == "--bot-"* ]]; then
             [ -f "$CONFIG" ] && \
                 jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" \
                 > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-            sed -i "/^${pass}|/d" "$DB" "$USAGE_DB" 2>/dev/null
+            sed -i "/^${pass}|/d" "$DB" "$USAGE_DB" "$CONN_LIMIT_FILE" 2>/dev/null
             systemctl restart zivpn 2>/dev/null
             echo "✅ User removed."
             ;;
@@ -1118,7 +1183,7 @@ if [[ "$1" == "--bot-"* ]]; then
                     [ -f "$CONFIG" ] && \
                         jq --arg p "$pass" '.auth.config -= [$p]' "$CONFIG" \
                         > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-                    sed -i "/^${pass}|/d" "$DB" "$USAGE_DB" 2>/dev/null
+                    sed -i "/^${pass}|/d" "$DB" "$USAGE_DB" "$CONN_LIMIT_FILE" 2>/dev/null
                 }
             done < <(cat "$DB")
             systemctl restart zivpn 2>/dev/null
@@ -1127,7 +1192,7 @@ if [[ "$1" == "--bot-"* ]]; then
         trial)
             mins="${1:-10}"
             hwid="trial_$(openssl rand -hex 4)"
-            finalpass="trial_${hwid}"
+            finalpass=$(openssl rand -base64 32 | tr -d '/=+' | head -c32)
             port=$(find_free_port)
             exp=$(date -d "+1 day" +%Y-%m-%d 2>/dev/null || date -v +1d +%Y-%m-%d)
             mkdir -p "$(dirname "$CONFIG")"
@@ -1144,7 +1209,7 @@ if [[ "$1" == "--bot-"* ]]; then
               [ -f "$CONFIG" ] && \
                   jq --arg p "$finalpass" '.auth.config -= [$p]' "$CONFIG" \
                   > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
-              sed -i "/^${finalpass}|/d" "$DB" "$USAGE_DB" 2>/dev/null
+              sed -i "/^${finalpass}|/d" "$DB" "$USAGE_DB" "$CONN_LIMIT_FILE" 2>/dev/null
               systemctl restart zivpn 2>/dev/null
             ) &
             ;;
@@ -1200,14 +1265,10 @@ while true; do
         22) do_badvpn ;;
         23) config_telegram ;;
         24) do_user_status ;;
+        25) do_enforcement_menu ;;
+        26) do_limits_status ;;
         99) do_uninstall ;;
         0)  goodbye; exit 0 ;;
         *)  echo -e "\n  ${RED}✘  Invalid option.${RST}"; sleep 1 ;;
     esac
 done
-EOF
-
-# Make executable
-chmod +x /usr/local/bin/onepesewa
-
-echo "✅ Script installed as 'onepesewa'. Run it with: onepesewa"
