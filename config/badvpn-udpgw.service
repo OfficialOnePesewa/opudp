@@ -1,0 +1,12 @@
+[Unit]
+Description=BadVPN UDPGW for ZIVPN
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/badvpn-udpgw --listen-addr 0.0.0.0:7300
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
