@@ -18,7 +18,7 @@ BOT_SCRIPT="/usr/local/bin/opudp_bot.py"
 CONN_LIMIT_FILE="/etc/zivpn/conn_limits.db"
 IP_LIMIT_FILE="/etc/zivpn/ip_limits.db"
 BACKUP_DIR="/etc/zivpn/backups"
-PANEL_VERSION="2.2.0"
+PANEL_VERSION="2.3.0"
 ADMIN_HANDLE="@OfficialOnePesewa"
 TG_CHANNEL="https://t.me/officialonepesewatech"
 
@@ -168,7 +168,7 @@ banner() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#  MENU (updated with new IP limit options 27 & 28)
+#  MENU
 # ══════════════════════════════════════════════════════════════
 show_menu() {
     echo -e "${WHT}╔═══════════════════════════════════════════════════════════════╗${RST}"
@@ -186,7 +186,7 @@ show_menu() {
     echo -e "${WHT}║${RST}  ${YLW}${BOLD}◈  SYSTEM & TOOLS${RST}                                             ${WHT}║${RST}"
     printf  "${WHT}║${RST}  ${GRN}[15]${RST} Backup       ${GRN}[16]${RST} Restore     ${GRN}[17]${RST} Port Range  ${GRN}[18]${RST} ${YLW}Update${RST}  ${WHT}║${RST}\n"
     printf  "${WHT}║${RST}  ${GRN}[21]${RST} 🚀 BBR Opt    ${GRN}[22]${RST} 📡 BadVPN    ${GRN}[23]${RST} 🤖 Bot Config  ${GRN}[25]${RST} 🔒 ConnEnf${WHT}║${RST}\n"
-    printf  "${WHT}║${RST}  ${GRN}[26]${RST} 📊 Conn Status ${GRN}[27]${RST} 🔢 IP Limit   ${GRN}[28]${RST} 🔄 Reset IPs              ${WHT}║${RST}\n"
+    printf  "${WHT}║${RST}  ${GRN}[26]${RST} 📊 Conn Status ${GRN}[27]${RST} 🔢 IP Limit   ${GRN}[28]${RST} 🔄 Reset IPs  ${WHT}║${RST}\n"
     echo -e "${WHT}╠═══════════════════════════════════════════════════════════════╣${RST}"
     printf  "${WHT}║${RST}  ${RED}[99]${RST} 🗑  UNINSTALL                        ${GRN}[0]${RST} 🚪 Exit       ${WHT}║${RST}\n"
     echo -e "${WHT}╚═══════════════════════════════════════════════════════════════╝${RST}"
@@ -274,73 +274,139 @@ add_user_core() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#  IP LIMIT TRACKING FUNCTIONS
+#  INSTANT IP LIMIT ENFORCEMENT (systemd service, 5-second loop)
 # ══════════════════════════════════════════════════════════════
-update_user_ip_tracking() {
-    local pass="$1"
-    local current_ip="$2"
-    local ip_limit="$3"
-    local ip_file="/etc/zivpn/iplist_${pass}.db"
-    local temp_file="${ip_file}.tmp"
 
-    [ -z "$current_ip" ] && return 0
-    # Skip private/local addresses
-    [[ "$current_ip" =~ ^(127\.|10\.|172\.1[6-9]|172\.2[0-9]|172\.3[0-1]|192\.168\.) ]] && return 0
+IPMON_SERVICE_FILE="/etc/systemd/system/opudp-ipmon.service"
+IPMON_DAEMON="/usr/local/bin/opudp_ip_monitor_daemon.sh"
 
-    mkdir -p "$(dirname "$ip_file")"
-    # Clean old entries (> 2 hours)
-    if [ -f "$ip_file" ]; then
+write_ip_monitor_daemon() {
+    cat > "$IPMON_DAEMON" <<'DAEMONEOF'
+#!/bin/bash
+# Instant IP limit monitor – runs every 5 seconds
+DB="/etc/zivpn/users.db"
+IP_LIMIT_FILE="/etc/zivpn/ip_limits.db"
+LOG_FILE="/var/log/opudp_ipmon.log"
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
+
+# Kill all conntrack entries for a given IP and port
+kill_ip_on_port() {
+    local ip="$1"
+    local port="$2"
+    conntrack -D -p udp --orig-dst "$port" --orig-src "$ip" 2>/dev/null
+    conntrack -D -p udp --reply-src "$ip" --reply-dst "$port" 2>/dev/null
+    conntrack -D -p udp --dport "$port" --src "$ip" 2>/dev/null
+}
+
+while true; do
+    [ ! -f "$DB" ] && sleep 5 && continue
+    
+    while IFS='|' read -r pass expiry quota port hwid used; do
+        [ -z "$port" ] && continue
+        ip_limit=$(grep "^${pass}|" "$IP_LIMIT_FILE" 2>/dev/null | cut -d'|' -f2)
+        [ -z "$ip_limit" ] || [ "$ip_limit" -eq 0 ] && continue
+        
+        ip_file="/etc/zivpn/iplist_${pass}.db"
+        [ ! -f "$ip_file" ] && touch "$ip_file"
+        
+        # Clean old entries (> 2 hours)
+        local temp_file="${ip_file}.tmp"
         while IFS='|' read -r ip ts; do
             if [ $(( $(date +%s) - ts )) -lt 7200 ]; then
                 echo "$ip|$ts" >> "$temp_file"
             fi
         done < "$ip_file"
         mv "$temp_file" "$ip_file" 2>/dev/null
-    else
-        touch "$ip_file"
-    fi
-
-    if ! grep -q "^${current_ip}|" "$ip_file" 2>/dev/null; then
-        local current_unique=$(wc -l < "$ip_file")
-        if [ "$current_unique" -lt "$ip_limit" ]; then
-            echo "${current_ip}|$(date +%s)" >> "$ip_file"
-        else
-            # Block new IP
-            local port=$(grep "^${pass}|" "$DB" 2>/dev/null | cut -d'|' -f4)
-            if [ -n "$port" ]; then
-                iptables -I INPUT -p udp --dport "$port" -s "$current_ip" -j DROP 2>/dev/null
-                echo "$(date) - BLOCKED IP: $current_ip for user $pass (limit $ip_limit)" >> /var/log/opudp_limits.log
+        
+        # Get currently active source IPs on this port
+        ss -un state established 2>/dev/null | grep ":${port} " | awk '{print $5}' | cut -d: -f1 | sort -u | while read remote_ip; do
+            # Skip private/local addresses
+            [[ "$remote_ip" =~ ^(127\.|10\.|172\.1[6-9]|172\.2[0-9]|172\.3[0-1]|192\.168\.) ]] && continue
+            
+            if ! grep -q "^${remote_ip}|" "$ip_file" 2>/dev/null; then
+                current_count=$(wc -l < "$ip_file")
+                if [ "$current_count" -lt "$ip_limit" ]; then
+                    echo "${remote_ip}|$(date +%s)" >> "$ip_file"
+                    log "ALLOWED new IP $remote_ip for $pass ($((current_count+1))/$ip_limit)"
+                else
+                    log "KILL second device: $remote_ip for $pass (limit $ip_limit)"
+                    kill_ip_on_port "$remote_ip" "$port"
+                    iptables -I INPUT -p udp --dport "$port" -s "$remote_ip" -j DROP 2>/dev/null
+                    echo "$(date) - KILLED IP: $remote_ip for user $pass (limit $ip_limit)" >> /var/log/opudp_ip_kill.log
+                fi
+            else
+                # IP already in list – ensure no stale DROP rules
+                iptables -D INPUT -p udp --dport "$port" -s "$remote_ip" -j DROP 2>/dev/null
             fi
-            return 1
-        fi
-    fi
-    return 0
+        done
+    done < "$DB"
+    
+    sleep 5
+done
+DAEMONEOF
+    chmod +x "$IPMON_DAEMON"
 }
 
-get_user_ip_limit() {
-    local pass="$1"
-    grep "^${pass}|" "$IP_LIMIT_FILE" 2>/dev/null | cut -d'|' -f2
+create_ipmon_service() {
+    cat > "$IPMON_SERVICE_FILE" <<SERVEOF
+[Unit]
+Description=OP UDP Panel Instant IP Limit Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=$IPMON_DAEMON
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVEOF
+    systemctl daemon-reload
+}
+
+enable_ip_monitor() {
+    write_ip_monitor_daemon
+    create_ipmon_service
+    systemctl enable opudp-ipmon 2>/dev/null
+    systemctl restart opudp-ipmon 2>/dev/null
+    echo -e "\n  ${GRN}✔ Instant IP limit monitoring enabled (systemd service, checks every 5 seconds).${RST}"
+}
+
+disable_ip_monitor() {
+    systemctl stop opudp-ipmon 2>/dev/null
+    systemctl disable opudp-ipmon 2>/dev/null
+    rm -f "$IPMON_SERVICE_FILE" "$IPMON_DAEMON"
+    rm -f /etc/cron.d/opudp_ip_monitor 2>/dev/null  # remove old cron if any
+    systemctl daemon-reload
+    echo -e "\n  ${YLW}⚠ Instant IP monitoring disabled.${RST}"
+}
+
+ip_monitor_status() {
+    if systemctl is-active --quiet opudp-ipmon 2>/dev/null; then
+        echo -e "  ${GRN}● Enabled${RST} (systemd service, runs every 5 sec)"
+    else
+        echo -e "  ${RED}● Disabled${RST}"
+    fi
 }
 
 reset_user_ips() {
     local pass="$1"
     local port=$(grep "^${pass}|" "$DB" 2>/dev/null | cut -d'|' -f4)
-    # Remove iptables blocks for this user's port (optional)
+    # Remove all iptables DROP rules for this port
     if [ -n "$port" ]; then
         iptables -D INPUT -p udp --dport "$port" -j DROP 2>/dev/null
-        iptables -D INPUT -p udp --dport "$port" -j DROP 2>/dev/null  # sometimes needs twice
+        iptables -D INPUT -p udp --dport "$port" -j DROP 2>/dev/null
     fi
     rm -f "/etc/zivpn/iplist_${pass}.db"
     echo "$(date) - Reset IP list for user $pass" >> /var/log/opudp_limits.log
 }
 
-# ══════════════════════════════════════════════════════════════
-#  ENFORCEMENT SCRIPTS (cron)
-# ══════════════════════════════════════════════════════════════
+# ── Connection limit enforcement (cron, not changed) ──────────
 ENFORCE_SCRIPT="/usr/local/bin/opudp_enforce_limits.sh"
 ENFORCE_CRON="/etc/cron.d/opudp_connlimit"
-IPMON_SCRIPT="/usr/local/bin/opudp_ip_monitor.sh"
-IPMON_CRON="/etc/cron.d/opudp_ip_monitor"
 
 write_enforce_script() {
     cat > "$ENFORCE_SCRIPT" <<'ENFEOF'
@@ -367,41 +433,6 @@ ENFEOF
     chmod +x "$ENFORCE_SCRIPT"
 }
 
-write_ip_monitor() {
-    cat > "$IPMON_SCRIPT" <<'IPEOF'
-#!/bin/bash
-DB="/etc/zivpn/users.db"
-IP_LIMIT_FILE="/etc/zivpn/ip_limits.db"
-LOG_FILE="/var/log/opudp_ipmon.log"
-
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"; }
-
-[ ! -f "$DB" ] && exit 0
-
-while IFS='|' read -r pass expiry quota port hwid used; do
-    [ -z "$port" ] && continue
-    ip_limit=$(grep "^${pass}|" "$IP_LIMIT_FILE" 2>/dev/null | cut -d'|' -f2)
-    [ -z "$ip_limit" ] || [ "$ip_limit" -eq 0 ] && continue
-    # Get unique source IPs currently active on this port
-    ss -un state established 2>/dev/null | grep ":${port} " | awk '{print $5}' | cut -d: -f1 | sort -u | while read remote_ip; do
-        # This function is not directly available here, we call a short helper
-        ip_file="/etc/zivpn/iplist_${pass}.db"
-        [ ! -f "$ip_file" ] && touch "$ip_file"
-        if ! grep -q "^${remote_ip}|" "$ip_file" 2>/dev/null; then
-            current=$(wc -l < "$ip_file")
-            if [ "$current" -lt "$ip_limit" ]; then
-                echo "${remote_ip}|$(date +%s)" >> "$ip_file"
-            else
-                log "IP LIMIT EXCEEDED for $pass: $remote_ip (limit $ip_limit)"
-                iptables -I INPUT -p udp --dport "$port" -s "$remote_ip" -j DROP 2>/dev/null
-            fi
-        fi
-    done
-done < "$DB"
-IPEOF
-    chmod +x "$IPMON_SCRIPT"
-}
-
 enable_enforcement() {
     write_enforce_script
     echo "* * * * * root $ENFORCE_SCRIPT" > "$ENFORCE_CRON"
@@ -426,30 +457,11 @@ enforcement_status() {
     fi
 }
 
-enable_ip_monitor() {
-    write_ip_monitor
-    echo "* * * * * root $IPMON_SCRIPT" > "$IPMON_CRON"
-    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
-    echo -e "\n  ${GRN}✔ IP limit monitoring enabled (cron every minute).${RST}"
-}
-
-disable_ip_monitor() {
-    rm -f "$IPMON_SCRIPT" "$IPMON_CRON"
-    systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
-    echo -e "\n  ${YLW}⚠ IP monitoring disabled.${RST}"
-}
-
-ip_monitor_status() {
-    if [ -f "$IPMON_CRON" ]; then
-        echo -e "  ${GRN}● Enabled${RST} (cron job every minute)"
-    else
-        echo -e "  ${RED}● Disabled${RST}"
-    fi
-}
-
 # ══════════════════════════════════════════════════════════════
-#  MENU FUNCTIONS (implementations)
+#  MENU FUNCTIONS (most unchanged, only do_ip_limit updated)
 # ══════════════════════════════════════════════════════════════
+
+# [1] START
 do_start() {
     echo -e "\n  ${YLW}▸ Starting ZIVPN...${RST}"
     if systemctl start zivpn 2>/dev/null; then
@@ -460,6 +472,7 @@ do_start() {
     press_enter
 }
 
+# [2] STOP
 do_stop() {
     echo -e "\n  ${YLW}▸ Stopping ZIVPN...${RST}"
     if systemctl stop zivpn 2>/dev/null; then
@@ -470,6 +483,7 @@ do_stop() {
     press_enter
 }
 
+# [3] RESTART
 do_restart() {
     echo -e "\n  ${YLW}▸ Restarting ZIVPN...${RST}"
     if systemctl restart zivpn 2>/dev/null; then
@@ -480,6 +494,7 @@ do_restart() {
     press_enter
 }
 
+# [4] STATUS
 do_status() {
     echo -e "\n  ${CYN}${BOLD}◈  ZIVPN Service Status${RST}\n"
     systemctl status zivpn --no-pager -l 2>/dev/null || \
@@ -487,6 +502,7 @@ do_status() {
     press_enter
 }
 
+# [5] LIST USERS
 do_list() {
     echo -e "\n  ${CYN}${BOLD}◈  Registered Users${RST}\n"
     if [ ! -f "$DB" ] || [ ! -s "$DB" ]; then
@@ -510,6 +526,7 @@ do_list() {
     press_enter
 }
 
+# [6] ADD USER
 do_add_user() {
     echo ""
     echo -e "  ${YLW}╔══════════════════════════════════════════════════════════════╗${RST}"
@@ -563,7 +580,7 @@ do_add_user() {
         echo -e "  ${GRN}╚══════════════════════════════════════════════════════════════╝${RST}"
         
         # Ask to enable IP monitoring if not already
-        if [ ! -f "$IPMON_CRON" ] && [ "$ip_limit" -gt 0 ]; then
+        if [ ! -f "$IPMON_SERVICE_FILE" ] && [ "$ip_limit" -gt 0 ]; then
             echo ""
             echo -ne "  ${GRN}Enable IP limit monitoring globally? (y/N): ${RST}"; read -r en
             if [[ "$en" =~ ^[Yy]$ ]]; then
@@ -576,6 +593,7 @@ do_add_user() {
     press_enter
 }
 
+# [7] REMOVE USER
 do_remove_user() {
     echo -e "\n  ${RED}${BOLD}◈  Remove User${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -601,6 +619,7 @@ do_remove_user() {
     press_enter
 }
 
+# [8] RENEW USER
 do_renew_user() {
     echo -e "\n  ${CYN}${BOLD}◈  Renew / Extend User${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -625,6 +644,7 @@ do_renew_user() {
     press_enter
 }
 
+# [9] CLEANUP
 do_cleanup() {
     echo -e "\n  ${YLW}${BOLD}◈  Cleanup Expired Users${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -651,6 +671,7 @@ do_cleanup() {
     press_enter
 }
 
+# [10] CONNECTION STATS
 do_conn_stats() {
     echo -e "\n  ${CYN}${BOLD}◈  Connection Statistics${RST}\n"
     echo -e "  ${WHT}── Active UDP Connections ──────────────────────────────${RST}"
@@ -673,6 +694,7 @@ do_conn_stats() {
     press_enter
 }
 
+# [11] BW+EXPIRY REPORT
 do_bw_expiry() {
     echo -e "\n  ${CYN}${BOLD}◈  Bandwidth & Expiry Report${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -705,6 +727,7 @@ do_bw_expiry() {
     press_enter
 }
 
+# [12] RESET BW
 do_reset_bw() {
     echo -e "\n  ${YLW}${BOLD}◈  Reset Bandwidth${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -734,6 +757,7 @@ do_reset_bw() {
     press_enter
 }
 
+# [13] SPEED TEST
 do_speedtest() {
     echo -e "\n  ${CYN}${BOLD}◈  Speed Test${RST}\n"
     if command -v speedtest-cli &>/dev/null; then
@@ -761,6 +785,7 @@ do_speedtest() {
     press_enter
 }
 
+# [14] LIVE LOGS
 do_live_logs() {
     echo -e "\n  ${CYN}${BOLD}◈  Live ZIVPN Logs${RST}  ${DIM}(Ctrl+C to stop)${RST}\n"
     journalctl -u zivpn -f --no-pager 2>/dev/null \
@@ -769,6 +794,7 @@ do_live_logs() {
     press_enter
 }
 
+# [15] BACKUP
 do_backup() {
     echo -e "\n  ${CYN}${BOLD}◈  Backup${RST}\n"
     mkdir -p "$BACKUP_DIR"
@@ -793,6 +819,7 @@ do_backup() {
     press_enter
 }
 
+# [16] RESTORE
 do_restore() {
     echo -e "\n  ${YLW}${BOLD}◈  Restore${RST}\n"
     mkdir -p "$BACKUP_DIR"
@@ -820,6 +847,7 @@ do_restore() {
     press_enter
 }
 
+# [17] PORT RANGE
 do_port_range() {
     echo -e "\n  ${CYN}${BOLD}◈  Configure Port Range${RST}\n"
     echo -e "  ${DIM}Current: ${WHT}${PORT_START}${RST}${DIM} – ${WHT}${PORT_END}${RST}"
@@ -834,6 +862,7 @@ do_port_range() {
     press_enter
 }
 
+# [18] UPDATE PANEL
 do_update() {
     echo -e "\n  ${YLW}${BOLD}◈  Updating Panel...${RST}\n"
     local self tmp
@@ -854,6 +883,7 @@ do_update() {
     fi
 }
 
+# [19] CONNECTION LIMIT (concurrent sessions)
 do_conn_limit() {
     echo -e "\n  ${CYN}${BOLD}◈  Connection Limit (concurrent sessions)${RST}\n"
     echo -ne "  ${GRN}Enter full password: ${RST}"; read -r pass
@@ -886,6 +916,7 @@ do_conn_limit() {
     press_enter
 }
 
+# [20] TRIAL USER
 do_trial_user() {
     echo -e "\n  ${CYN}${BOLD}◈  Trial User${RST}\n"
     echo -ne "  ${GRN}Duration in minutes [1-60]: ${RST}"; read -r mins
@@ -904,7 +935,6 @@ do_trial_user() {
         && mv /tmp/zivpn_tmp.json "$CONFIG"
     echo "${finalpass}|${exp}|100MB|${port}|${hwid}|0" >> "$DB"
     echo "${finalpass}|0" >> "$USAGE_DB"
-    # No IP limit for trial (0 = unlimited)
     setup_tracking "$port"
     systemctl restart zivpn 2>/dev/null
 
@@ -933,6 +963,7 @@ do_trial_user() {
     press_enter
 }
 
+# [21] BBR
 do_bbr() {
     echo -e "\n  ${YLW}${BOLD}◈  BBR + TCP Optimizer${RST}\n"
     echo -ne "  ${GRN}Continue? [y/N]: ${RST}"; read -r c
@@ -945,6 +976,7 @@ do_bbr() {
     press_enter
 }
 
+# [22] BADVPN
 do_badvpn() {
     echo -e "\n  ${YLW}${BOLD}◈  BadVPN UDPGW${RST}\n"
     echo -ne "  ${GRN}Install? [y/N]: ${RST}"; read -r c
@@ -956,6 +988,7 @@ do_badvpn() {
     press_enter
 }
 
+# [23] TELEGRAM BOT CONFIG
 config_telegram() {
     while true; do
         clear
@@ -1059,6 +1092,7 @@ EOF
     done
 }
 
+# [24] USER STATUS
 do_user_status() {
     echo -e "\n  ${CYN}${BOLD}◈  User Account Status${RST}\n"
     [ ! -f "$DB" ] || [ ! -s "$DB" ] && {
@@ -1108,7 +1142,7 @@ do_user_status() {
     printf  "  ${CYN}║${RST}  ${YLW}🔌  Port       :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$port"
     printf  "  ${CYN}║${RST}  ${YLW}👥  Sessions   :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$sessions active"
     printf  "  ${CYN}║${RST}  ${YLW}🚦  Conn Limit :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$conn_limit"
-    printf  "  ${CYN}║${RST}  ${YLW}🌐  IP Limit   :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$ip_limit ($unique_ips unique IPs seen)"
+    printf  "  ${CYN}║${RST}  ${YLW}🌐  IP Limit   :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$ip_limit ($unique_ips unique IPs tracked)"
     echo -e "  ${CYN}╠══════════════════════════════════════════════════════════════╣${RST}"
     printf  "  ${CYN}║${RST}  ${MAG}🌍  Server     :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$IP"
     printf  "  ${CYN}║${RST}  ${MAG}📍  Location   :${RST}  ${WHT}%-42s${RST}${CYN}║${RST}\n" "$CITY, $COUNTRY"
@@ -1118,6 +1152,7 @@ do_user_status() {
     press_enter
 }
 
+# [25] TOGGLE CONNECTION LIMIT ENFORCEMENT
 do_enforcement_menu() {
     echo -e "\n  ${CYN}${BOLD}◈  Connection Limit Enforcement (Concurrent Sessions)${RST}\n"
     enforcement_status
@@ -1131,6 +1166,7 @@ do_enforcement_menu() {
     press_enter
 }
 
+# [26] SHOW ALL LIMITS STATUS
 do_limits_status() {
     echo -e "\n  ${CYN}${BOLD}◈  Limits Status (Connection & IP)${RST}\n"
     echo "  ─── Connection (concurrent) limits ───"
@@ -1156,6 +1192,7 @@ do_limits_status() {
     press_enter
 }
 
+# [27] SET IP LIMIT
 do_ip_limit() {
     echo -e "\n  ${CYN}${BOLD}◈  Set Unique IP Limit per User${RST}\n"
     echo -ne "  ${GRN}Enter full password: ${RST}"; read -r pass
@@ -1176,15 +1213,14 @@ do_ip_limit() {
     else
         echo -e "\n  ${GRN}✔  IP limit removed (unlimited) for ${YLW}${pass}${RST}"
     fi
-    # Optionally reset current IP list to start fresh
     echo -e "\n  ${DIM}Do you want to reset the tracked IPs for this user?${RST}"
     echo -ne "  ${GRN}Reset? (y/N): ${RST}"; read -r reset
     if [[ "$reset" =~ ^[Yy]$ ]]; then
         reset_user_ips "$pass"
         echo -e "  ${GRN}✔  IP list reset.${RST}"
     fi
-    # Enable global monitoring if not already
-    if [ ! -f "$IPMON_CRON" ] && [ "$lim" -gt 0 ]; then
+    # Enable global IP monitoring if not already
+    if [ ! -f "$IPMON_SERVICE_FILE" ] && [ "$lim" -gt 0 ]; then
         echo ""
         echo -e "  ${YLW}Global IP limit monitoring is currently OFF.${RST}"
         echo -ne "  ${GRN}Enable it now? (y/N): ${RST}"; read -r en
@@ -1195,6 +1231,7 @@ do_ip_limit() {
     press_enter
 }
 
+# [28] RESET IP LIST FOR A USER
 do_reset_ip_list() {
     echo -e "\n  ${CYN}${BOLD}◈  Reset Tracked IPs for a User${RST}\n"
     echo -ne "  ${GRN}Enter full password: ${RST}"; read -r pass
@@ -1203,7 +1240,6 @@ do_reset_ip_list() {
         echo -e "  ${RED}✘  Not found.${RST}"; press_enter; return
     }
     reset_user_ips "$pass"
-    # Also remove any iptables blocks on that user's port (optional)
     local port=$(grep "^${pass}|" "$DB" | cut -d'|' -f4)
     if [ -n "$port" ]; then
         iptables -D INPUT -p udp --dport "$port" -j DROP 2>/dev/null
@@ -1213,6 +1249,7 @@ do_reset_ip_list() {
     press_enter
 }
 
+# [99] UNINSTALL
 do_uninstall() {
     echo -e "\n  ${RED}${BOLD}╔══════════════════════════════════════════════════════╗${RST}"
     echo -e "  ${RED}${BOLD}║   ⚠  WARNING – UNINSTALL OPUDP PANEL               ║${RST}"
@@ -1220,17 +1257,19 @@ do_uninstall() {
     echo -e "  ${DIM}  • Stops ZIVPN + Telegram bot${RST}"
     echo -e "  ${DIM}  • Deletes all users, config, data${RST}"
     echo -e "  ${DIM}  • Removes onepesewa command${RST}"
-    echo -e "  ${DIM}  • Disables all enforcement & monitoring cron jobs${RST}\n"
+    echo -e "  ${DIM}  • Disables all enforcement & monitoring services${RST}\n"
     echo -ne "  ${RED}Type 'UNINSTALL' to confirm: ${RST}"; read -r confirm
     [ "$confirm" != "UNINSTALL" ] && {
         echo -e "\n  ${YLW}Aborted.${RST}"; press_enter; return
     }
     echo -e "\n  ${YLW}▸ Stopping services...${RST}"
-    systemctl stop    zivpn opudp-bot 2>/dev/null
-    systemctl disable zivpn opudp-bot 2>/dev/null
+    systemctl stop    zivpn opudp-bot opudp-ipmon 2>/dev/null
+    systemctl disable zivpn opudp-bot opudp-ipmon 2>/dev/null
     echo -e "  ${YLW}▸ Disabling cron jobs...${RST}"
-    rm -f "$ENFORCE_SCRIPT" "$ENFORCE_CRON" "$IPMON_SCRIPT" "$IPMON_CRON"
+    rm -f "$ENFORCE_SCRIPT" "$ENFORCE_CRON" 
+    rm -f "$IPMON_SERVICE_FILE" "$IPMON_DAEMON"
     systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
+    systemctl daemon-reload
     echo -e "  ${YLW}▸ Removing iptables rules...${RST}"
     [ -f "$DB" ] && while IFS='|' read -r pass exp quota port hwid used; do
         [ -n "$port" ] && remove_tracking "$port"
@@ -1242,16 +1281,17 @@ do_uninstall() {
            /usr/local/bin/onepesewa \
            /usr/local/bin/opudp_bot.py \
            /usr/local/bin/opudp_enforce_limits.sh \
-           /usr/local/bin/opudp_ip_monitor.sh \
+           /usr/local/bin/opudp_ip_monitor_daemon.sh \
            /etc/cron.d/opudp_connlimit \
-           /etc/cron.d/opudp_ip_monitor \
            /etc/systemd/system/zivpn.service \
-           /etc/systemd/system/opudp-bot.service 2>/dev/null
+           /etc/systemd/system/opudp-bot.service \
+           /etc/systemd/system/opudp-ipmon.service 2>/dev/null
     systemctl daemon-reload 2>/dev/null
     echo -e "\n  ${GRN}✔  Uninstalled. Goodbye! — ${ADMIN_HANDLE}${RST}\n"
     exit 0
 }
 
+# GOODBYE
 goodbye() {
     clear
     print_logo
@@ -1265,7 +1305,7 @@ goodbye() {
 }
 
 # ══════════════════════════════════════════════════════════════
-#  BOT CLI MODE (unchanged, but functions already exist)
+#  BOT CLI MODE (shortened for brevity, but functional)
 # ══════════════════════════════════════════════════════════════
 if [[ "$1" == "--bot-"* ]]; then
     cmd="${1#--bot-}"; shift
@@ -1284,7 +1324,6 @@ if [[ "$1" == "--bot-"* ]]; then
             echo "👤 Admin: $ADMIN_HANDLE"
             ;;
         adduser)
-            # Usage: --bot-adduser <basepass> <days> <quota> <hwid> [ip_limit]
             result=$(add_user_core "$1" "$2" "$3" "$4" "$5")
             echo "$result"
             ;;
@@ -1325,8 +1364,7 @@ if [[ "$1" == "--bot-"* ]]; then
             used=${used:-0}
             quota_b=$(quota_to_bytes "$quota")
             remain=$(( quota_b > used ? quota_b - used : 0 ))
-            days_left=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) \
-                            - $(date +%s) ) / 86400 ))
+            days_left=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
             echo "🔍 <b>${pass:0:20}</b>"
             echo "📅 Expiry: $expiry ($days_left days)"
             echo "📊 Quota: $quota"
@@ -1343,8 +1381,7 @@ if [[ "$1" == "--bot-"* ]]; then
             used=${used:-0}
             quota_b=$(quota_to_bytes "$quota")
             remain=$(( quota_b > used ? quota_b - used : 0 ))
-            days_left=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) \
-                            - $(date +%s) ) / 86400 ))
+            days_left=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
             sessions=$(ss -un state established 2>/dev/null \
                        | grep -c ":${port} " || echo 0)
             echo "🔑 Password: $p"
