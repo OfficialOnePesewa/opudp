@@ -4,7 +4,7 @@ cat > /usr/local/bin/onepesewa <<'PANEL_EOF'
 # ║         OP UDP PANEL  –  by @OfficialOnePesewa              ║
 # ║         Telegram: https://t.me/officialonepesewatech        ║
 # ║   Random passwords | IP limit | Conn limit | BW counting    ║
-# ║   Pause / Resume accounts with timer                       ║
+# ║   Pause / Resume accounts with timer – v2.6.1               ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 CONFIG="/etc/zivpn/config.json"
@@ -22,7 +22,7 @@ CONN_LIMIT_FILE="/etc/zivpn/conn_limits.db"
 IP_LIMIT_FILE="/etc/zivpn/ip_limits.db"
 PAUSE_DB="/etc/zivpn/paused.db"
 BACKUP_DIR="/etc/zivpn/backups"
-PANEL_VERSION="2.6.0"
+PANEL_VERSION="2.6.1"
 ADMIN_HANDLE="@OfficialOnePesewa"
 TG_CHANNEL="https://t.me/officialonepesewatech"
 
@@ -33,7 +33,7 @@ BOLD='\e[1m'    DIM='\e[2m'
 
 # ── Dependencies (auto-install) ───────────────────────────────
 NEED_UPDATE=0
-for pkg in jq bc wget openssl conntrack; do
+for pkg in jq bc wget openssl conntrack at; do
     if ! command -v $pkg &>/dev/null; then
         NEED_UPDATE=1
         break
@@ -41,11 +41,16 @@ for pkg in jq bc wget openssl conntrack; do
 done
 if [ $NEED_UPDATE -eq 1 ]; then
     apt-get update -qq 2>/dev/null
-    for pkg in jq bc wget openssl conntrack; do
+    for pkg in jq bc wget openssl conntrack at; do
         if ! command -v $pkg &>/dev/null; then
             apt-get install -y $pkg -qq 2>/dev/null
         fi
     done
+fi
+# Make sure atd is running
+if ! systemctl is-active --quiet atd 2>/dev/null; then
+    systemctl enable atd 2>/dev/null
+    systemctl start  atd 2>/dev/null
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -1167,16 +1172,20 @@ do_trial_user() {
     printf  "  ${GRN}║${RST}  ${CYN}📢  Channel  :${RST}  ${WHT}%-44s${RST}${GRN}║${RST}\n" "$TG_CHANNEL"
     echo -e "  ${GRN}╚══════════════════════════════════════════════════════════════╝${RST}"
 
-    (
-        sleep $(( mins * 60 ))
-        remove_tracking "$port"
-        [ -f "$CONFIG" ] && \
-            jq --arg p "$finalpass" '.auth.config -= [$p]' "$CONFIG" > /tmp/zivpn_tmp.json \
-            && mv /tmp/zivpn_tmp.json "$CONFIG"
-        sed -i "/^${finalpass}|/d" "$DB" "$USAGE_DB" "$CONN_LIMIT_FILE" "$IP_LIMIT_FILE" "$PAUSE_DB" 2>/dev/null
-        rm -f "/etc/zivpn/iplist_${finalpass}.db" 2>/dev/null
-        systemctl restart zivpn 2>/dev/null
-    ) &
+    # Schedule reliable cleanup via 'at' - persistent, survives restarts
+    cat <<ATCMD | at now + ${mins} minutes 2>/dev/null
+remove_tracking "$port"
+[ -f "$CONFIG" ] && jq --arg p "$finalpass" '.auth.config -= [\$p]' "$CONFIG" > /tmp/zivpn_tmp.json && mv /tmp/zivpn_tmp.json "$CONFIG"
+grep -Fv "^${finalpass}|" "$DB" > /tmp/db_tmp && mv /tmp/db_tmp "$DB"
+grep -Fv "^${finalpass}|" "$USAGE_DB" > /tmp/udb_tmp && mv /tmp/udb_tmp "$USAGE_DB"
+[ -f "$CONN_LIMIT_FILE" ] && grep -Fv "^${finalpass}|" "$CONN_LIMIT_FILE" > /tmp/cl_tmp && mv /tmp/cl_tmp "$CONN_LIMIT_FILE"
+[ -f "$IP_LIMIT_FILE" ] && grep -Fv "^${finalpass}|" "$IP_LIMIT_FILE" > /tmp/ipl_tmp && mv /tmp/ipl_tmp "$IP_LIMIT_FILE"
+[ -f "$PAUSE_DB" ] && grep -Fv "^${finalpass}|" "$PAUSE_DB" > /tmp/pd_tmp && mv /tmp/pd_tmp "$PAUSE_DB"
+rm -f "/etc/zivpn/iplist_${finalpass}.db" 2>/dev/null
+systemctl restart zivpn 2>/dev/null
+ATCMD
+
+    echo -e "  ${GRN}ℹ  Cleanup scheduled via 'at' (persistent).${RST}"
     press_enter
 }
 
@@ -1659,7 +1668,5 @@ while true; do
 done
 PANEL_EOF
 
-# Make executable and run
 chmod +x /usr/local/bin/onepesewa
 ln -sf /usr/local/bin/onepesewa /usr/local/bin/opudp 2>/dev/null
-onepesewa
