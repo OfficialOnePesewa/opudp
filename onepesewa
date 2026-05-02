@@ -2,7 +2,7 @@ cat > /usr/local/bin/onepesewa <<'PANEL_EOF'
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════════╗
 # ║         OP UDP PANEL  –  by @OfficialOnePesewa              ║
-# ║   v2.7.0 – HWID Lock Enforcer | IP/Conn/BW limits | Pause  ║
+# ║   v2.7.1 – HWID Lock | Instant Pause | IP/Conn/BW limits   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 CONFIG="/etc/zivpn/config.json"
@@ -21,7 +21,7 @@ IP_LIMIT_FILE="/etc/zivpn/ip_limits.db"
 PAUSE_DB="/etc/zivpn/paused.db"
 HWID_ALLOWED_DB="/etc/zivpn/hwid_allowed.db"
 BACKUP_DIR="/etc/zivpn/backups"
-PANEL_VERSION="2.7.0"
+PANEL_VERSION="2.7.1"
 ADMIN_HANDLE="@OfficialOnePesewa"
 TG_CHANNEL="https://t.me/officialonepesewatech"
 
@@ -214,6 +214,9 @@ quota_to_bytes() {
     else echo "0"; fi
 }
 
+# ══════════════════════════════════════════════════════════════
+#  ADD USER (with optional password, ip & conn limits)
+# ══════════════════════════════════════════════════════════════
 add_user_core() {
     local basepass="$1" days="$2" quota="$3" hwid="$4" ip_limit="$5" conn_limit="$6" userpass="$7"
     local finalpass
@@ -324,7 +327,13 @@ pause_user() {
     esac
     local port=$(grep "^${pass}|" "$DB" 2>/dev/null | cut -d'|' -f4)
     [ -z "$port" ] && { echo "ERROR: User not found."; return 1; }
+
+    # Block all traffic to the port
     iptables -I INPUT -p udp --dport "$port" -j DROP 2>/dev/null
+
+    # Kill every existing UDP connection on that port – instant disconnection
+    conntrack -D -p udp --dport "$port" 2>/dev/null
+
     local resume_ts=$(( $(date +%s) + seconds ))
     mkdir -p "$(dirname "$PAUSE_DB")"
     sed -i "/^${pass}|/d" "$PAUSE_DB" 2>/dev/null
